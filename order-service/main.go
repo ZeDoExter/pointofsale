@@ -12,9 +12,50 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 )
+
+type Order struct {
+	ID             string    `json:"id"`
+	TableID        *int      `json:"table_id"`
+	OrderNumber    int       `json:"order_number"`
+	Status         string    `json:"status"`
+	Subtotal       float64   `json:"subtotal"`
+	Tax            float64   `json:"tax"`
+	DiscountAmount float64   `json:"discount_amount"`
+	TotalAmount    float64   `json:"total_amount"`
+	CreatedBy      string    `json:"created_by"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type OrderItem struct {
+	ID           string    `json:"id"`
+	OrderID      string    `json:"order_id"`
+	MenuItemID   string    `json:"menu_item_id"`
+	MenuItemName string    `json:"menu_item_name"`
+	Quantity     int       `json:"quantity"`
+	UnitPrice    float64   `json:"unit_price"`
+	ItemTotal    float64   `json:"item_total"`
+	ItemStatus   string    `json:"item_status"`
+	AddedBy      string    `json:"added_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type CreateOrderRequest struct {
+	TableID   *int   `json:"table_id"`
+	CreatedBy string `json:"created_by"`
+}
+
+type AddItemRequest struct {
+	MenuItemID   string  `json:"menu_item_id"`
+	MenuItemName string  `json:"menu_item_name"`
+	Quantity     int     `json:"quantity"`
+	UnitPrice    float64 `json:"unit_price"`
+	AddedBy      string  `json:"added_by"`
+}
 
 func main() {
 	port := os.Getenv("PORT")
@@ -51,25 +92,20 @@ func main() {
 	}).Methods(http.MethodGet)
 
 	router.HandleFunc("/api/orders", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			TableID string `json:"table_id"`
-			UserID  string `json:"user_id"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":     "order-123",
-			"status": "OPEN",
-		})
+		createOrder(db, w, r)
 	}).Methods(http.MethodPost)
 
 	router.HandleFunc("/api/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := mux.Vars(r)["id"]
-		writeJSON(w, http.StatusOK, map[string]any{
-			"id":     id,
-			"status": "OPEN",
-			"total":  0,
-		})
+		getOrder(db, w, r)
 	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/orders/{id}/items", func(w http.ResponseWriter, r *http.Request) {
+		addOrderItem(db, w, r)
+	}).Methods(http.MethodPost)
+
+	router.HandleFunc("/api/orders/{id}/status", func(w http.ResponseWriter, r *http.Request) {
+		updateOrderStatus(db, w, r)
+	}).Methods(http.MethodPut)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
@@ -87,6 +123,182 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}
+}
+
+func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	var req CreateOrderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	if req.CreatedBy == "" {
+		req.CreatedBy = uuid.New().String()
+	}
+
+	var orderNumber int
+	err := db.QueryRow("SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders").Scan(&orderNumber)
+	if err != nil {
+		log.Printf("Failed to get order number: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	orderID := uuid.New().String()
+	_, err = db.Exec(`
+		INSERT INTO orders (id, table_id, order_number, status, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, 'OPEN', $4, NOW(), NOW())
+	`, orderID, req.TableID, orderNumber, req.CreatedBy)
+
+	if err != nil {
+		log.Printf("Failed to create order: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":           orderID,
+		"order_number": orderNumber,
+		"status":       "OPEN",
+	})
+}
+
+func getOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	var order Order
+	err := db.QueryRow(`
+		SELECT id, table_id, order_number, status, subtotal, tax, discount_amount, 
+		       total_amount, created_by, created_at, updated_at
+		FROM orders WHERE id = $1
+	`, id).Scan(
+		&order.ID, &order.TableID, &order.OrderNumber, &order.Status,
+		&order.Subtotal, &order.Tax, &order.DiscountAmount, &order.TotalAmount,
+		&order.CreatedBy, &order.CreatedAt, &order.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order_not_found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to get order: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT id, menu_item_id, menu_item_name, quantity, unit_price, item_total, 
+		       item_status, added_by, created_at
+		FROM order_items WHERE order_id = $1 ORDER BY created_at DESC
+	`, id)
+	if err != nil {
+		log.Printf("Failed to get items: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	var items []OrderItem
+	for rows.Next() {
+		var item OrderItem
+		item.OrderID = id
+		rows.Scan(&item.ID, &item.MenuItemID, &item.MenuItemName, &item.Quantity,
+			&item.UnitPrice, &item.ItemTotal, &item.ItemStatus, &item.AddedBy, &item.CreatedAt)
+		items = append(items, item)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"order": order,
+		"items": items,
+	})
+}
+
+func addOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	orderID := mux.Vars(r)["id"]
+
+	var req AddItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	if req.AddedBy == "" {
+		req.AddedBy = uuid.New().String()
+	}
+
+	itemTotal := float64(req.Quantity) * req.UnitPrice
+	itemID := uuid.New().String()
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("Failed to start transaction: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		INSERT INTO order_items (id, order_id, menu_item_id, menu_item_name, quantity, 
+		                         unit_price, item_total, item_status, added_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, NOW())
+	`, itemID, orderID, req.MenuItemID, req.MenuItemName, req.Quantity, req.UnitPrice, itemTotal, req.AddedBy)
+
+	if err != nil {
+		log.Printf("Failed to add item: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	_, err = tx.Exec(`
+		UPDATE orders 
+		SET subtotal = subtotal + $1,
+		    total_amount = total_amount + $1,
+		    updated_at = NOW()
+		WHERE id = $2
+	`, itemTotal, orderID)
+
+	if err != nil {
+		log.Printf("Failed to update order totals: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("Failed to commit: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         itemID,
+		"order_id":   orderID,
+		"item_total": itemTotal,
+	})
+}
+
+func updateOrderStatus(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	orderID := mux.Vars(r)["id"]
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	_, err := db.Exec(`
+		UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2
+	`, req.Status, orderID)
+
+	if err != nil {
+		log.Printf("Failed to update status: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": req.Status})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
