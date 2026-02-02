@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 )
@@ -25,6 +27,11 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8082"
+	}
+
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "dev-secret"
 	}
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -58,15 +65,52 @@ func main() {
 	router.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Username == "" || req.Password == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_credentials"})
+			return
+		}
+
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"sub":  req.Username,
+			"role": "cashier",
+			"iat":  time.Now().Unix(),
+			"exp":  time.Now().Add(8 * time.Hour).Unix(),
+		})
+		signed, err := token.SignedString([]byte(jwtSecret))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_sign_failed"})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"access_token": "jwt-token-placeholder",
+			"access_token": signed,
 			"role":         "cashier",
 		})
 	}).Methods(http.MethodPost)
 
 	router.HandleFunc("/api/auth/validate", func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing_token"})
+			return
+		}
+
+		tokenStr := strings.TrimPrefix(auth, "Bearer ")
+		parsed, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method")
+			}
+			return []byte(jwtSecret), nil
+		})
+		if err != nil || !parsed.Valid {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
+			return
+		}
+
+		claims, _ := parsed.Claims.(jwt.MapClaims)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"valid": true,
+			"sub":   claims["sub"],
+			"role":  claims["role"],
 		})
 	}).Methods(http.MethodPost)
 

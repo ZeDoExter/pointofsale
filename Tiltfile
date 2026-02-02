@@ -1,11 +1,17 @@
-docker_compose('docker-compose.yml')
+docker_build('pointofsale-api-gateway', 'api-gateway')
+docker_build('pointofsale-auth-service', 'auth-service')
+docker_build('pointofsale-order-service', 'order-service')
+docker_build('pointofsale-promotion-service', 'promotion-service')
+docker_build('pointofsale-payment-service', 'payment-service')
 
-dc_resource('postgres', labels=['database'])
-dc_resource('api-gateway', labels=['gateway'])
-dc_resource('auth-service', labels=['services'])
-dc_resource('order-service', labels=['services'])
-dc_resource('promotion-service', labels=['services'])
-dc_resource('payment-service', labels=['services'])
+k8s_yaml('kubernetes/pos.yaml')
+
+k8s_resource('postgres', labels=['database'])
+k8s_resource('api-gateway', port_forwards=8080, labels=['gateway'])
+k8s_resource('auth-service', labels=['services'])
+k8s_resource('order-service', labels=['services'])
+k8s_resource('promotion-service', labels=['services'])
+k8s_resource('payment-service', labels=['services'])
 
 local_resource(
     'go-mod-tidy',

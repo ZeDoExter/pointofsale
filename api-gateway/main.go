@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,8 +10,10 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 )
 
@@ -25,6 +28,11 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+	}
+
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "dev-secret"
 	}
 
 	if u := os.Getenv("AUTH_SERVICE_URL"); u != "" {
@@ -53,9 +61,13 @@ func main() {
 	router.PathPrefix("/api/promotions").Handler(proxyTo(services["promotion"]))
 	router.PathPrefix("/api/payments").Handler(proxyTo(services["payment"]))
 
+	handler := loggingMiddleware(router)
+	handler = authMiddleware(jwtSecret, handler)
+	handler = corsMiddleware(handler)
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
-		Handler: corsMiddleware(router),
+		Handler: handler,
 	}
 
 	go func() {
@@ -74,6 +86,10 @@ func main() {
 func proxyTo(target string) http.Handler {
 	u, _ := url.Parse(target)
 	proxy := httputil.NewSingleHostReverseProxy(u)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("Upstream error: %v", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_unavailable"})
+	}
 	return proxy
 }
 
@@ -89,4 +105,46 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func authMiddleware(secret string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions || r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/api/auth") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing_token"})
+			return
+		}
+
+		tokenStr := strings.TrimPrefix(auth, "Bearer ")
+		parsed, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method")
+			}
+			return []byte(secret), nil
+		})
+		if err != nil || !parsed.Valid {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }
