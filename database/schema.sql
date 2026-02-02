@@ -1,0 +1,386 @@
+-- ============================================================================
+-- RESTAURANT POS - PostgreSQL Schema
+-- ============================================================================
+-- Design priorities:
+-- 1. Real-time reporting (instant data visibility)
+-- 2. Fast transactions (quick joins, no N+1 queries)
+-- 3. QR code sessions (easy open/close)
+-- 4. Table management (create/delete/rename)
+-- 5. No performance bottlenecks
+-- ============================================================================
+
+-- ============================================================================
+-- TABLES SCHEMA
+-- ============================================================================
+
+-- 1. USERS (Staff login)
+-- Staff accounts for POS
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username VARCHAR(50) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(20) NOT NULL, -- 'cashier', 'manager', 'admin'
+  name VARCHAR(100) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 2. TABLES (Physical tables in restaurant)
+-- Easy to create/delete/manage
+CREATE TABLE tables (
+  id SERIAL PRIMARY KEY,
+  table_number INT NOT NULL UNIQUE,
+  name VARCHAR(100) NOT NULL, -- e.g., "Table 5", "Bar Seat 3"
+  capacity INT NOT NULL DEFAULT 4,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_tables_active ON tables(is_active);
+
+-- 3. QR SESSIONS (For QR code ordering)
+-- Each table gets a session via QR code
+-- Can have multiple sessions per table (e.g., two groups at same table)
+CREATE TABLE qr_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  table_id INT NOT NULL REFERENCES tables(id),
+  qr_code_token VARCHAR(100) NOT NULL UNIQUE, -- unique token for QR
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  closed_at TIMESTAMP
+);
+
+CREATE INDEX idx_qr_sessions_table ON qr_sessions(table_id, is_active);
+CREATE INDEX idx_qr_sessions_token ON qr_sessions(qr_code_token);
+
+-- 4. ORDERS (Open bills)
+-- Core table: one order = one bill
+-- Status: OPEN -> CONFIRMED -> PAID/CANCELLED
+-- Can be created:
+--   - From table (waiter takes order)
+--   - From QR session (customer orders via QR)
+--   - Takeaway (no table)
+CREATE TABLE orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  table_id INT REFERENCES tables(id), -- NULL for takeaway
+  qr_session_id UUID REFERENCES qr_sessions(id), -- NULL if not QR
+  order_number INT NOT NULL, -- for display (e.g., "#0001")
+  status VARCHAR(20) NOT NULL DEFAULT 'OPEN', -- OPEN, CONFIRMED, PAID, CANCELLED
+  
+  -- Cached totals (for fast reporting)
+  -- Updated whenever items change or discounts applied
+  subtotal NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  tax NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  discount_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  total_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  
+  -- Metadata
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  confirmed_at TIMESTAMP,
+  paid_at TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT valid_status CHECK (status IN ('OPEN', 'CONFIRMED', 'PAID', 'CANCELLED'))
+);
+
+-- Critical indexes for reporting
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_table ON orders(table_id, status);
+CREATE INDEX idx_orders_qr_session ON orders(qr_session_id);
+CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
+CREATE INDEX idx_orders_paid_at ON orders(paid_at DESC);
+
+-- 5. ORDER_ITEMS (Line items - append only, never update)
+-- Append-only: when customer changes order, just add new item
+-- If customer removes item: add negative entry (negative qty)
+-- This gives full audit trail + supports undo
+CREATE TABLE order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  
+  -- What was ordered
+  menu_item_id VARCHAR(50) NOT NULL, -- reference to menu system
+  menu_item_name VARCHAR(255) NOT NULL, -- snapshot of name
+  
+  -- Quantity and pricing (snapshot at time of order)
+  quantity INT NOT NULL,
+  unit_price NUMERIC(10, 2) NOT NULL,
+  item_total NUMERIC(10, 2) NOT NULL, -- qty * unit_price
+  
+  -- Status for tracking
+  item_status VARCHAR(20) NOT NULL DEFAULT 'PENDING', 
+    -- PENDING, COOKING, READY, SERVED, REMOVED, CANCELLED
+  
+  -- Metadata
+  added_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  ready_at TIMESTAMP, -- when kitchen marked ready
+  served_at TIMESTAMP -- when item served to customer
+);
+
+-- Fast lookup: what items are in this order
+CREATE INDEX idx_order_items_order ON order_items(order_id);
+-- Fast lookup: kitchen view - what items need cooking
+CREATE INDEX idx_order_items_status ON order_items(item_status) WHERE item_status IN ('PENDING', 'COOKING');
+-- Fast lookup: recent items
+CREATE INDEX idx_order_items_created ON order_items(created_at DESC);
+
+-- 6. PROMOTIONS (Promotion rules)
+-- Rules are evaluated at checkout time, not at ordering time
+-- This allows promotions to change without affecting open orders
+CREATE TABLE promotions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code VARCHAR(50) UNIQUE, -- NULL for auto-applied promos
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  
+  -- Discount type
+  discount_type VARCHAR(20) NOT NULL, -- FIXED_AMOUNT, PERCENTAGE
+  discount_value NUMERIC(10, 2) NOT NULL,
+  max_discount NUMERIC(10, 2), -- cap on discount (for percentages)
+  min_order_total NUMERIC(10, 2), -- minimum order to apply
+  
+  -- Time-based activation
+  valid_from TIMESTAMP,
+  valid_until TIMESTAMP,
+  
+  -- Usage limits (NULL = unlimited)
+  max_usage_count INT, -- total uses allowed
+  max_usage_per_customer INT, -- uses per customer
+  
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT valid_discount_type CHECK (discount_type IN ('FIXED_AMOUNT', 'PERCENTAGE'))
+);
+
+CREATE INDEX idx_promotions_code ON promotions(code) WHERE is_active = true;
+CREATE INDEX idx_promotions_active ON promotions(is_active, valid_from, valid_until);
+
+-- 7. PROMOTION_USAGE (Track usage of codes)
+-- For rate limiting and audit
+CREATE TABLE promotion_usage (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  promotion_id UUID NOT NULL REFERENCES promotions(id) ON DELETE CASCADE,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  
+  used_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  
+  UNIQUE(order_id, promotion_id) -- only one use per order per promo
+);
+
+CREATE INDEX idx_promotion_usage_promo ON promotion_usage(promotion_id);
+CREATE INDEX idx_promotion_usage_order ON promotion_usage(order_id);
+
+-- 8. ORDER_DISCOUNTS (Applied discounts at checkout time)
+-- Record which promotions were applied and the calculated discount
+-- This is the final state - what actually got applied
+CREATE TABLE order_discounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  promotion_id UUID REFERENCES promotions(id), -- NULL if manual discount
+  
+  discount_name VARCHAR(255) NOT NULL,
+  discount_amount NUMERIC(10, 2) NOT NULL,
+  
+  applied_by UUID NOT NULL REFERENCES users(id), -- who approved this
+  applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_order_discounts_order ON order_discounts(order_id);
+
+-- 9. PAYMENTS (Payment records)
+-- One order can have multiple payments (split payments)
+-- Status: PENDING -> SUCCESS/FAILED
+CREATE TABLE payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  
+  amount NUMERIC(10, 2) NOT NULL,
+  payment_method VARCHAR(50) NOT NULL, -- CASH, CARD, QRCODE, etc
+  
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- PENDING, SUCCESS, FAILED
+  
+  -- For idempotency: external payment ID
+  -- e.g., Stripe transaction ID, bank reference
+  external_payment_id VARCHAR(255) UNIQUE,
+  
+  -- Error info if failed
+  failure_reason TEXT,
+  
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMP, -- when payment actually succeeded/failed
+  
+  CONSTRAINT valid_status CHECK (status IN ('PENDING', 'SUCCESS', 'FAILED'))
+);
+
+-- Fast lookup: get payments for order (for total)
+CREATE INDEX idx_payments_order ON payments(order_id);
+-- Fast lookup: successful payments (for accounting)
+CREATE INDEX idx_payments_successful ON payments(status) WHERE status = 'SUCCESS';
+-- Fast lookup: pending payments (for reconciliation)
+CREATE INDEX idx_payments_pending ON payments(status) WHERE status = 'PENDING';
+
+-- 10. PAYMENT_METHODS (Stored payment methods)
+-- Optional: if supporting saved cards, etc
+CREATE TABLE payment_methods (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type VARCHAR(50) NOT NULL, -- CASH, CARD, BANK_TRANSFER, QRCODE
+  name VARCHAR(255) NOT NULL, -- "Main Cash Register", "POS Card Reader"
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================================
+-- VIEWS FOR FAST REPORTING
+-- ============================================================================
+
+-- View: Current state of each table
+-- Shows what's happening right now at each table
+CREATE VIEW current_table_status AS
+SELECT 
+  t.id,
+  t.table_number,
+  t.name,
+  COALESCE(o.id, 'EMPTY') AS order_id,
+  COALESCE(o.status, 'EMPTY') AS order_status,
+  COALESCE(o.total_amount, 0) AS order_total,
+  COALESCE(COUNT(oi.id), 0) AS item_count,
+  COALESCE(o.created_at, NULL) AS order_started_at,
+  t.is_active
+FROM tables t
+LEFT JOIN orders o ON t.id = o.table_id AND o.status IN ('OPEN', 'CONFIRMED')
+LEFT JOIN order_items oi ON o.id = oi.order_id
+GROUP BY t.id, o.id;
+
+-- View: Kitchen display system (what needs to be cooked)
+-- Real-time view of what kitchen needs to see
+CREATE VIEW kitchen_display AS
+SELECT 
+  o.id AS order_id,
+  o.order_number,
+  t.table_number,
+  oi.id AS item_id,
+  oi.menu_item_name,
+  oi.quantity,
+  oi.item_status,
+  oi.created_at,
+  EXTRACT(EPOCH FROM (NOW() - oi.created_at))/60 AS minutes_waiting
+FROM orders o
+JOIN tables t ON o.table_id = t.id
+JOIN order_items oi ON o.id = oi.order_id
+WHERE o.status IN ('OPEN', 'CONFIRMED')
+  AND oi.item_status IN ('PENDING', 'COOKING')
+ORDER BY oi.created_at ASC;
+
+-- View: Real-time sales report
+-- Total sales, by status, by hour, etc
+CREATE VIEW sales_summary AS
+SELECT 
+  DATE(o.created_at) AS date,
+  EXTRACT(HOUR FROM o.created_at) AS hour,
+  COUNT(DISTINCT o.id) AS order_count,
+  COUNT(DISTINCT oi.id) AS item_count,
+  SUM(o.subtotal) AS subtotal,
+  SUM(o.tax) AS tax,
+  SUM(o.discount_amount) AS discounts,
+  SUM(o.total_amount) AS revenue
+FROM orders o
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE o.status IN ('PAID', 'CONFIRMED')
+GROUP BY DATE(o.created_at), EXTRACT(HOUR FROM o.created_at)
+ORDER BY date DESC, hour DESC;
+
+-- View: Open bills (cashier view)
+-- What bills are waiting for payment
+CREATE VIEW open_bills AS
+SELECT 
+  o.id,
+  o.order_number,
+  COALESCE(t.table_number::TEXT, 'TAKEAWAY') AS location,
+  o.total_amount,
+  o.created_at,
+  EXTRACT(EPOCH FROM (NOW() - o.created_at))/60 AS minutes_open,
+  COUNT(DISTINCT oi.id) AS item_count,
+  SUM(CASE WHEN oi.item_status = 'SERVED' THEN 1 ELSE 0 END) AS served_items,
+  SUM(CASE WHEN oi.item_status IN ('PENDING', 'COOKING', 'READY') THEN 1 ELSE 0 END) AS pending_items
+FROM orders o
+LEFT JOIN tables t ON o.table_id = t.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE o.status IN ('OPEN', 'CONFIRMED')
+GROUP BY o.id, t.table_number;
+
+-- ============================================================================
+-- PERFORMANCE TUNING
+-- ============================================================================
+
+-- Enable query performance extensions (optional)
+-- ANALYZE; -- Run this after loading data
+
+-- ============================================================================
+-- NOTES FOR REAL-TIME OPERATIONS
+-- ============================================================================
+
+/*
+REAL-TIME PERFORMANCE CONSIDERATIONS:
+
+1. CACHED TOTALS
+   - Orders have cached subtotal, tax, discount, total
+   - Updated atomically with transaction
+   - Avoids expensive SUM() on every query
+
+2. NO COMPLEX JOINS NEEDED FOR CHECKOUT
+   Example checkout query (fast):
+   SELECT total_amount, tax FROM orders WHERE id = ?
+   - Single row lookup, instant
+   
+3. KITCHEN DISPLAY
+   Query: SELECT from kitchen_display view (filtered by status)
+   - Uses indexes on item_status
+   - O(n) where n = items to cook (usually <100)
+
+4. QR SESSIONS
+   - Open: INSERT into qr_sessions
+   - Close: UPDATE qr_sessions SET closed_at = NOW()
+   - Link to order: on checkout, assign to order
+   - No order until checkout → saves DB space
+
+5. TABLE MANAGEMENT
+   - Create table: INSERT INTO tables
+   - Delete table: UPDATE tables SET is_active = false (soft delete)
+   - Rename: UPDATE tables SET name = ?
+   - All fast, no cascades
+
+6. AUDIT TRAIL
+   - order_items is append-only
+   - If customer removes item: INSERT with negative qty
+   - Full history in one table
+   - Can reconstruct any point in time
+
+7. IDEMPOTENCY
+   - Payments use external_payment_id UNIQUE
+   - If payment fails and retried:
+     INSERT fails (duplicate) or succeeds (network timeout recovery)
+   - UPDATE status atomically: status = ? WHERE id = ? AND status = 'PENDING'
+
+8. TRANSACTIONS
+   - Checkout wraps in single transaction:
+     BEGIN;
+     - Update order status to CONFIRMED
+     - INSERT order_discounts
+     - UPDATE order totals (cached)
+     - INSERT payment
+     COMMIT;
+   - All or nothing, no partial states
+
+9. MULTI-REGION CONSISTENCY
+   - All data in single postgres instance
+   - No eventual consistency issues
+   - Replicate later if needed (Patroni, etc)
+*/
