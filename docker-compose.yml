@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: pointofsale
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d pointofsale"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      AUTH_SERVICE_URL: http://auth-service:8082
+      ORDER_SERVICE_URL: http://order-service:8083
+      PROMOTION_SERVICE_URL: http://promotion-service:8084
+      PAYMENT_SERVICE_URL: http://payment-service:8085
+    depends_on:
+      - auth-service
+      - order-service
+      - promotion-service
+      - payment-service
+
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      DATABASE_URL: postgres://user:password@postgres:5432/pointofsale?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  order-service:
+    build: ./order-service
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+      DATABASE_URL: postgres://user:password@postgres:5432/pointofsale?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  promotion-service:
+    build: ./promotion-service
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+      DATABASE_URL: postgres://user:password@postgres:5432/pointofsale?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  payment-service:
+    build: ./payment-service
+    ports:
+      - "8085:8085"
+    environment:
+      PORT: "8085"
+      DATABASE_URL: postgres://user:password@postgres:5432/pointofsale?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
