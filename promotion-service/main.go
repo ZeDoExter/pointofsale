@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
@@ -32,6 +33,13 @@ func main() {
 	}
 	defer db.Close()
 
+	for i := 0; i < 30; i++ {
+		if err := db.Ping(); err == nil {
+			break
+		}
+		log.Printf("Waiting for database... (%d/30)", i+1)
+		time.Sleep(time.Second)
+	}
 	if err := db.Ping(); err != nil {
 		log.Fatalf("DB ping failed: %v", err)
 	}

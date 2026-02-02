@@ -248,11 +248,11 @@ SELECT
   t.id,
   t.table_number,
   t.name,
-  COALESCE(o.id, 'EMPTY') AS order_id,
-  COALESCE(o.status, 'EMPTY') AS order_status,
+  o.id AS order_id,
+  COALESCE(o.status::TEXT, 'EMPTY') AS order_status,
   COALESCE(o.total_amount, 0) AS order_total,
   COALESCE(COUNT(oi.id), 0) AS item_count,
-  COALESCE(o.created_at, NULL) AS order_started_at,
+  o.created_at AS order_started_at,
   t.is_active
 FROM tables t
 LEFT JOIN orders o ON t.id = o.table_id AND o.status IN ('OPEN', 'CONFIRMED')
