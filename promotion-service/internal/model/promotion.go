@@ -1,0 +1,40 @@
+package model
+package model
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}	OrderID       string  `json:"order_id"`	OrderTotal    float64 `json:"order_total"`	PromotionCode string  `json:"promotion_code"`type EvaluateRequest struct {}	ErrorMessage   string  `json:"error_message"`	IsValid        bool    `json:"is_valid"`	DiscountAmount float64 `json:"discount_amount"`	PromotionName  string  `json:"promotion_name"`	PromotionID    string  `json:"promotion_id"`type PromotionResult struct {}	UpdatedAt           time.Time       `json:"updated_at"`	CreatedAt           time.Time       `json:"created_at"`	IsActive            bool            `json:"is_active"`	MaxUsagePerCustomer sql.NullInt64   `json:"max_usage_per_customer"`	MaxUsageCount       sql.NullInt64   `json:"max_usage_count"`	ValidUntil          sql.NullTime    `json:"valid_until"`	ValidFrom           sql.NullTime    `json:"valid_from"`	MinOrderTotal       sql.NullFloat64 `json:"min_order_total"`	MaxDiscount         sql.NullFloat64 `json:"max_discount"`	DiscountValue       float64        `json:"discount_value"`	DiscountType        string         `json:"discount_type"`	Description         sql.NullString `json:"description"`	Name                string         `json:"name"`	Code                sql.NullString `json:"code"`	ID                  string         `json:"id"`type Promotion struct {)	"time"	"database/sql"import (
