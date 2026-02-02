@@ -12,12 +12,18 @@ import (
 	"syscall"
 
 	"github.com/gorilla/mux"
+	_ "github.com/lib/pq"
 )
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
 
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8083"
+		port = "8082"
 	}
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -41,26 +47,20 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}).Methods(http.MethodGet)
 
-	router.HandleFunc("/api/orders", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			TableID string `json:"table_id"`
-			UserID  string `json:"user_id"`
-		}
+	router.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		var req LoginRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":     "order-123",
-			"status": "OPEN",
+		writeJSON(w, http.StatusOK, map[string]any{
+			"access_token": "jwt-token-placeholder",
+			"role":         "cashier",
 		})
 	}).Methods(http.MethodPost)
 
-	router.HandleFunc("/api/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := mux.Vars(r)["id"]
+	router.HandleFunc("/api/auth/validate", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id":     id,
-			"status": "OPEN",
-			"total":  0,
+			"valid": true,
 		})
-	}).Methods(http.MethodGet)
+	}).Methods(http.MethodPost)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
@@ -74,7 +74,7 @@ func main() {
 		server.Shutdown(context.Background())
 	}()
 
-	log.Printf("Order service on port %s", port)
+	log.Printf("Auth service on port %s", port)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}
