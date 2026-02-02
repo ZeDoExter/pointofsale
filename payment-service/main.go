@@ -38,9 +38,9 @@ type Payment struct {
 }
 
 type PromotionEvalResponse struct {
-	Valid           bool    `json:"valid"`
-	PromotionID     string  `json:"promotion_id"`
-	DiscountAmount  float64 `json:"discount_amount"`
+	Valid          bool    `json:"valid"`
+	PromotionID    string  `json:"promotion_id"`
+	DiscountAmount float64 `json:"discount_amount"`
 }
 
 func main() {
@@ -181,11 +181,11 @@ func checkout(db *sql.DB, promotionServiceURL string, w http.ResponseWriter, r *
 	_, _ = db.Exec(`UPDATE orders SET status = 'PAID', paid_at = NOW() WHERE id = $1`, req.OrderID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"payment_id":  paymentID,
-		"order_id":    req.OrderID,
-		"amount":      finalAmount,
-		"status":      "SUCCESS",
-		"created_at":  now,
+		"payment_id": paymentID,
+		"order_id":   req.OrderID,
+		"amount":     finalAmount,
+		"status":     "SUCCESS",
+		"created_at": now,
 	})
 }
 
@@ -237,7 +237,7 @@ func evaluatePromotion(baseURL, code string, orderTotal float64) (*PromotionEval
 	}
 
 	var result struct {
-		PromotionID   string  `json:"promotion_id"`
+		PromotionID    string  `json:"promotion_id"`
 		DiscountAmount float64 `json:"discount_amount"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
