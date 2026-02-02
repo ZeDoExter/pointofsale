@@ -1,0 +1,10 @@
+FROM golang:1.21-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 go build -o order-service .
+
+FROM alpine:latest
+WORKDIR /root/
+COPY --from=builder /app/order-service .
+EXPOSE 8083
+CMD ["./order-service"]
