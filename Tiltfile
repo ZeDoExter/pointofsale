@@ -3,11 +3,13 @@ docker_build('pointofsale-auth-service', 'auth-service')
 docker_build('pointofsale-order-service', 'order-service')
 docker_build('pointofsale-promotion-service', 'promotion-service')
 docker_build('pointofsale-payment-service', 'payment-service')
+docker_build('pointofsale-frontend', 'frontend')
 
 k8s_yaml('kubernetes/pos.yaml')
 
 k8s_resource('postgres', labels=['database'])
 k8s_resource('api-gateway', port_forwards=8080, labels=['gateway'])
+k8s_resource('frontend', port_forwards=30080, labels=['frontend'])
 k8s_resource('auth-service', labels=['services'])
 k8s_resource('order-service', labels=['services'])
 k8s_resource('promotion-service', labels=['services'])

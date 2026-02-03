@@ -77,7 +77,7 @@ CREATE TABLE orders (
   total_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
   
   -- Metadata
-  created_by UUID NOT NULL REFERENCES users(id),
+  created_by UUID REFERENCES users(id), -- NULL for guest/anonymous orders
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   confirmed_at TIMESTAMP,
   paid_at TIMESTAMP,
@@ -115,7 +115,7 @@ CREATE TABLE order_items (
     -- PENDING, COOKING, READY, SERVED, REMOVED, CANCELLED
   
   -- Metadata
-  added_by UUID NOT NULL REFERENCES users(id),
+  added_by UUID REFERENCES users(id), -- NULL for guest orders
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   ready_at TIMESTAMP, -- when kitchen marked ready
   served_at TIMESTAMP -- when item served to customer

@@ -83,7 +83,7 @@ data:
       total_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
       
       -- Metadata
-      created_by UUID NOT NULL REFERENCES users(id),
+      created_by UUID REFERENCES users(id), -- NULL for guest/anonymous orders
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
       confirmed_at TIMESTAMP,
       paid_at TIMESTAMP,
@@ -121,7 +121,7 @@ data:
         -- PENDING, COOKING, READY, SERVED, REMOVED, CANCELLED
       
       -- Metadata
-      added_by UUID NOT NULL REFERENCES users(id),
+      added_by UUID REFERENCES users(id), -- NULL for guest orders
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
       ready_at TIMESTAMP, -- when kitchen marked ready
       served_at TIMESTAMP -- when item served to customer
@@ -704,3 +704,37 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: pointofsale-frontend
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30080

@@ -45,8 +45,15 @@ type OrderItem struct {
 }
 
 type CreateOrderRequest struct {
-	TableID   *int   `json:"table_id"`
-	CreatedBy string `json:"created_by"`
+	TableID   string            `json:"table_id"`
+	Items     []CreateOrderItem `json:"items"`
+	CreatedBy string            `json:"created_by"`
+}
+
+type CreateOrderItem struct {
+	ItemName string  `json:"item_name"`
+	Price    float64 `json:"price"`
+	Quantity int     `json:"quantity"`
 }
 
 type AddItemRequest struct {
@@ -95,6 +102,10 @@ func main() {
 		createOrder(db, w, r)
 	}).Methods(http.MethodPost)
 
+	router.HandleFunc("/api/orders", func(w http.ResponseWriter, r *http.Request) {
+		listOrders(db, w, r)
+	}).Methods(http.MethodGet)
+
 	router.HandleFunc("/api/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
 		getOrder(db, w, r)
 	}).Methods(http.MethodGet)
@@ -102,6 +113,10 @@ func main() {
 	router.HandleFunc("/api/orders/{id}/items", func(w http.ResponseWriter, r *http.Request) {
 		addOrderItem(db, w, r)
 	}).Methods(http.MethodPost)
+
+	router.HandleFunc("/api/orders/{id}/items/{itemId}", func(w http.ResponseWriter, r *http.Request) {
+		removeOrderItem(db, w, r)
+	}).Methods(http.MethodDelete)
 
 	router.HandleFunc("/api/orders/{id}/status", func(w http.ResponseWriter, r *http.Request) {
 		updateOrderStatus(db, w, r)
@@ -128,12 +143,24 @@ func main() {
 func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	var req CreateOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("JSON decode error: %v", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 		return
 	}
 
-	if req.CreatedBy == "" {
-		req.CreatedBy = uuid.New().String()
+	// If no created_by provided (guest order), use NULL
+	var createdBy *string
+	if req.CreatedBy != "" {
+		createdBy = &req.CreatedBy
+	}
+
+	var tableID *int
+	if req.TableID != "" {
+		id := 0
+		_, err := fmt.Sscanf(req.TableID, "%d", &id)
+		if err == nil {
+			tableID = &id
+		}
 	}
 
 	var orderNumber int
@@ -145,10 +172,24 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	orderID := uuid.New().String()
-	_, err = db.Exec(`
-		INSERT INTO orders (id, table_id, order_number, status, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, 'OPEN', $4, NOW(), NOW())
-	`, orderID, req.TableID, orderNumber, req.CreatedBy)
+	subtotal := 0.0
+	for _, item := range req.Items {
+		subtotal += item.Price * float64(item.Quantity)
+	}
+	tax := subtotal * 0.15
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("Failed to start transaction: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		INSERT INTO orders (id, table_id, order_number, status, subtotal, tax, total_amount, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, 'OPEN', $4, $5, $6, $7, NOW(), NOW())
+	`, orderID, tableID, orderNumber, subtotal, tax, subtotal+tax, createdBy)
 
 	if err != nil {
 		log.Printf("Failed to create order: %v", err)
@@ -156,10 +197,31 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for _, item := range req.Items {
+		itemID := uuid.New().String()
+		itemTotal := item.Price * float64(item.Quantity)
+		_, err := tx.Exec(`
+			INSERT INTO order_items (id, order_id, menu_item_id, menu_item_name, quantity, unit_price, item_total, item_status, added_by, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, NOW())
+		`, itemID, orderID, uuid.New().String(), item.ItemName, item.Quantity, item.Price, itemTotal, createdBy)
+		if err != nil {
+			log.Printf("Failed to create order item: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+			return
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("Failed to commit: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":           orderID,
+		"order_id":     orderID,
 		"order_number": orderNumber,
 		"status":       "OPEN",
+		"total_amount": subtotal + tax,
 	})
 }
 
@@ -275,6 +337,100 @@ func addOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		"order_id":   orderID,
 		"item_total": itemTotal,
 	})
+}
+
+func listOrders(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	tableID := r.URL.Query().Get("table_id")
+
+	query := `SELECT id, table_id, order_number, status, subtotal, tax, discount_amount, 
+	       total_amount, created_by, created_at, updated_at FROM orders WHERE 1=1`
+	var args []interface{}
+
+	if status != "" {
+		query += ` AND status = $` + fmt.Sprintf("%d", len(args)+1)
+		args = append(args, status)
+	}
+	if tableID != "" {
+		query += ` AND table_id = $` + fmt.Sprintf("%d", len(args)+1)
+		args = append(args, tableID)
+	}
+
+	query += ` ORDER BY created_at DESC LIMIT 100`
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Failed to list orders: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	var orders []Order
+	for rows.Next() {
+		var order Order
+		rows.Scan(&order.ID, &order.TableID, &order.OrderNumber, &order.Status,
+			&order.Subtotal, &order.Tax, &order.DiscountAmount, &order.TotalAmount,
+			&order.CreatedBy, &order.CreatedAt, &order.UpdatedAt)
+		orders = append(orders, order)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
+}
+
+func removeOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	orderID := vars["id"]
+	itemID := vars["itemId"]
+
+	var itemTotal float64
+	err := db.QueryRow(`SELECT item_total FROM order_items WHERE id = $1 AND order_id = $2`, itemID, orderID).Scan(&itemTotal)
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "item_not_found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to get item: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("Failed to start transaction: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`DELETE FROM order_items WHERE id = $1`, itemID)
+	if err != nil {
+		log.Printf("Failed to delete item: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	_, err = tx.Exec(`
+		UPDATE orders 
+		SET subtotal = subtotal - $1,
+		    total_amount = total_amount - $1,
+		    updated_at = NOW()
+		WHERE id = $2
+	`, itemTotal, orderID)
+
+	if err != nil {
+		log.Printf("Failed to update order totals: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("Failed to commit: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func updateOrderStatus(db *sql.DB, w http.ResponseWriter, r *http.Request) {

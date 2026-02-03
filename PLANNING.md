@@ -3,65 +3,65 @@
 ## Service Implementation Checklist
 
 ### api-gateway
-- [ ] Main router setup
-- [ ] JWT validation middleware
-- [ ] Request routing to services
-- [ ] Error handling
-- [ ] Logging middleware
-- [ ] Health check endpoint
+- [x] Main router setup
+- [x] JWT validation middleware
+- [x] Request routing to services
+- [x] Error handling
+- [x] Logging middleware
+- [x] Health check endpoint
 
 ### auth-service
-- [ ] User model and repository
-- [ ] JWT token generation
-- [ ] User login endpoint
+- [x] User model and repository
+- [x] JWT token generation
+- [x] User login endpoint
 - [ ] User registration (optional)
-- [ ] Role assignment
-- [ ] Token refresh endpoint
+- [x] Role assignment
+- [x] Token refresh endpoint
 
 ### order-service
-- [ ] Order model and repository
-- [ ] Order item model and repository
-- [ ] Create order endpoint
-- [ ] Add item endpoint
-- [ ] Remove item endpoint
-- [ ] View order endpoint
-- [ ] List orders endpoint
-- [ ] Change order status endpoint
+- [x] Order model and repository
+- [x] Order item model and repository
+- [x] Create order endpoint
+- [x] Add item endpoint
+- [x] Remove item endpoint
+- [x] View order endpoint
+- [x] List orders endpoint
+- [x] Change order status endpoint
 
 ### payment-service
-- [ ] Payment model and repository
-- [ ] Payment method model
-- [ ] Order discount model
-- [ ] Checkout endpoint (calls promotion-service)
-- [ ] Payment creation
-- [ ] Payment status endpoint
-- [ ] Idempotency handling
+- [x] Payment model and repository
+- [x] Payment method model
+- [x] Order discount model
+- [x] Checkout endpoint (calls promotion-service)
+- [x] Payment creation
+- [x] Payment status endpoint
+- [x] Idempotency handling
 
 ### promotion-service
-- [ ] Promotion model and repository
-- [ ] Promotion validation logic
-- [ ] Discount calculation
-- [ ] Evaluate promotion endpoint
-- [ ] Apply promotion endpoint
-- [ ] Usage counter management
+- [x] Promotion model and repository
+- [x] Promotion validation logic
+- [x] Discount calculation
+- [x] Evaluate promotion endpoint
+- [x] Apply promotion endpoint
+- [x] Usage counter management
 
 ### database
-- [ ] PostgreSQL schema
-- [ ] Migration scripts
-- [ ] Sample data (seeding)
+- [x] PostgreSQL schema
+- [x] Migration scripts
+- [x] Sample data (seeding)
 
 ### kubernetes
-- [ ] Deployment manifests for each service
-- [ ] Service manifests
-- [ ] ConfigMaps for environment variables
-- [ ] Secrets for credentials
-- [ ] PostgreSQL StatefulSet
+- [x] Deployment manifests for each service
+- [x] Service manifests
+- [x] ConfigMaps for environment variables
+- [x] Secrets for credentials
+- [x] PostgreSQL StatefulSet
 
 ### Local Dev
-- [ ] Dockerfile for each service
+- [x] Dockerfile for each service
 - [ ] docker-compose.yml (optional)
-- [ ] Tiltfile
-- [ ] Environment setup (.env example)
+- [x] Tiltfile
+- [x] Environment setup (.env example)
 
 ---
 

@@ -5,10 +5,11 @@ set -e
 
 PGPASSWORD="password" psql -h localhost -U user -d pointofsale << EOF
 
--- Insert sample users
+-- Insert sample users with different roles
 INSERT INTO users (id, username, password_hash, role, name, is_active) VALUES
-  ('550e8400-e29b-41d4-a716-446655440000', 'cashier1', 'hash1', 'cashier', 'Cashier One', true),
-  ('550e8400-e29b-41d4-a716-446655440001', 'manager1', 'hash2', 'manager', 'Manager One', true)
+  ('550e8400-e29b-41d4-a716-446655440000', 'admin', 'hash_admin', 'admin', 'Admin User', true),
+  ('550e8400-e29b-41d4-a716-446655440001', 'manager', 'hash_manager', 'manager', 'Manager User', true),
+  ('550e8400-e29b-41d4-a716-446655440002', 'cashier', 'hash_cashier', 'cashier', 'Cashier User', true)
 ON CONFLICT DO NOTHING;
 
 -- Insert sample tables

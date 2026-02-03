@@ -70,11 +70,39 @@ func main() {
 			return
 		}
 
+		// Query user from database
+		var userID, passwordHash, role, name string
+		var isActive bool
+		err := db.QueryRow(
+			"SELECT id, password_hash, role, name, is_active FROM users WHERE username = $1",
+			req.Username,
+		).Scan(&userID, &passwordHash, &role, &name, &isActive)
+
+		if err == sql.ErrNoRows {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_credentials"})
+			return
+		}
+		if err != nil {
+			log.Printf("DB error: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+			return
+		}
+
+		if !isActive {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user_inactive"})
+			return
+		}
+
+		// TODO: Add password verification (bcrypt)
+		// For now, accepting any password for development
+
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub":  req.Username,
-			"role": "cashier",
-			"iat":  time.Now().Unix(),
-			"exp":  time.Now().Add(8 * time.Hour).Unix(),
+			"sub":      userID,
+			"username": req.Username,
+			"role":     role,
+			"name":     name,
+			"iat":      time.Now().Unix(),
+			"exp":      time.Now().Add(8 * time.Hour).Unix(),
 		})
 		signed, err := token.SignedString([]byte(jwtSecret))
 		if err != nil {
@@ -83,7 +111,9 @@ func main() {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"access_token": signed,
-			"role":         "cashier",
+			"role":         role,
+			"username":     req.Username,
+			"name":         name,
 		})
 	}).Methods(http.MethodPost)
 
@@ -111,6 +141,42 @@ func main() {
 			"valid": true,
 			"sub":   claims["sub"],
 			"role":  claims["role"],
+		})
+	}).Methods(http.MethodPost)
+
+	router.HandleFunc("/api/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing_token"})
+			return
+		}
+
+		tokenStr := strings.TrimPrefix(auth, "Bearer ")
+		parsed, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method")
+			}
+			return []byte(jwtSecret), nil
+		})
+		if err != nil || !parsed.Valid {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
+			return
+		}
+
+		claims, _ := parsed.Claims.(jwt.MapClaims)
+		newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"sub":  claims["sub"],
+			"role": claims["role"],
+			"iat":  time.Now().Unix(),
+			"exp":  time.Now().Add(8 * time.Hour).Unix(),
+		})
+		signed, err := newToken.SignedString([]byte(jwtSecret))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_sign_failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"access_token": signed,
 		})
 	}).Methods(http.MethodPost)
 

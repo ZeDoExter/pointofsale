@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: default
+data:
+  GATEWAY_PORT: "8080"
+  AUTH_SERVICE_URL: "http://auth-service:8082"
+  ORDER_SERVICE_URL: "http://order-service:8083"
+  PROMOTION_SERVICE_URL: "http://promotion-service:8084"
+  PAYMENT_SERVICE_URL: "http://payment-service:8085"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: database-config
+  namespace: default
+data:
+  DATABASE_HOST: "postgres"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "pointofsale"
+  DATABASE_SSL_MODE: "disable"

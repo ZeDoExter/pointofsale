@@ -18,10 +18,10 @@ import (
 )
 
 var services = map[string]string{
-	"auth":      "http://localhost:8082",
-	"order":     "http://localhost:8083",
-	"promotion": "http://localhost:8084",
-	"payment":   "http://localhost:8085",
+	"auth":      "http://auth-service:8082",
+	"order":     "http://order-service:8083",
+	"promotion": "http://promotion-service:8084",
+	"payment":   "http://payment-service:8085",
 }
 
 func main() {
@@ -61,9 +61,10 @@ func main() {
 	router.PathPrefix("/api/promotions").Handler(proxyTo(services["promotion"]))
 	router.PathPrefix("/api/payments").Handler(proxyTo(services["payment"]))
 
-	handler := loggingMiddleware(router)
+	// CRITICAL: CORS must come first to handle preflight requests
+	handler := corsMiddleware(router)
 	handler = authMiddleware(jwtSecret, handler)
-	handler = corsMiddleware(handler)
+	handler = loggingMiddleware(handler)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
@@ -109,11 +110,25 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func authMiddleware(secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth for: OPTIONS, health, auth endpoints, and user endpoints (GET/POST orders for QR menu)
 		if r.Method == http.MethodOptions || r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/api/auth") {
 			next.ServeHTTP(w, r)
 			return
 		}
 
+		// Allow GET /api/orders for user (list orders)
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/orders") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Allow POST /api/orders for user (create order without login)
+		if r.Method == http.MethodPost && r.URL.Path == "/api/orders" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// All other endpoints require JWT token
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing_token"})
@@ -131,6 +146,19 @@ func authMiddleware(secret string, next http.Handler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
 			return
 		}
+
+		// Extract role from token
+		claims, ok := parsed.Claims.(jwt.MapClaims)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_claims"})
+			return
+		}
+
+		role, _ := claims["role"].(string)
+
+		// Add role to request header for downstream services
+		r.Header.Set("X-User-Role", role)
+		r.Header.Set("X-User-ID", claims["sub"].(string))
 
 		next.ServeHTTP(w, r)
 	})
