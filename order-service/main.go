@@ -64,6 +64,27 @@ type AddItemRequest struct {
 	AddedBy      string  `json:"added_by"`
 }
 
+type SalesReport struct {
+	Date          string  `json:"date"`
+	OrderCount    int     `json:"order_count"`
+	TotalRevenue  float64 `json:"total_revenue"`
+	TotalDiscount float64 `json:"total_discount"`
+	TotalTax      float64 `json:"total_tax"`
+	AvgOrderValue float64 `json:"avg_order_value"`
+}
+
+type TopItem struct {
+	MenuItemName string  `json:"menu_item_name"`
+	QuantitySold int     `json:"quantity_sold"`
+	TotalRevenue float64 `json:"total_revenue"`
+}
+
+type HourlySales struct {
+	Hour         int     `json:"hour"`
+	OrderCount   int     `json:"order_count"`
+	TotalRevenue float64 `json:"total_revenue"`
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -121,6 +142,19 @@ func main() {
 	router.HandleFunc("/api/orders/{id}/status", func(w http.ResponseWriter, r *http.Request) {
 		updateOrderStatus(db, w, r)
 	}).Methods(http.MethodPut)
+
+	// Reports endpoints
+	router.HandleFunc("/api/reports/sales", func(w http.ResponseWriter, r *http.Request) {
+		getSalesReport(db, w, r)
+	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/reports/top-items", func(w http.ResponseWriter, r *http.Request) {
+		getTopItems(db, w, r)
+	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/reports/hourly-sales", func(w http.ResponseWriter, r *http.Request) {
+		getHourlySales(db, w, r)
+	}).Methods(http.MethodGet)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
@@ -479,4 +513,200 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func getSalesReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID := r.Header.Get("X-Branch-ID")
+	organizationID := r.Header.Get("X-Organization-ID")
+	role := r.Header.Get("X-User-Role")
+
+	// Parse query params
+	from := r.URL.Query().Get("from") // YYYY-MM-DD
+	to := r.URL.Query().Get("to")     // YYYY-MM-DD
+
+	if from == "" {
+		from = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+	}
+	if to == "" {
+		to = time.Now().Format("2006-01-02")
+	}
+
+	query := `
+		SELECT 
+			DATE(created_at) AS date,
+			COUNT(DISTINCT id) AS order_count,
+			COALESCE(SUM(total_amount), 0) AS total_revenue,
+			COALESCE(SUM(discount_amount), 0) AS total_discount,
+			COALESCE(SUM(tax), 0) AS total_tax,
+			COALESCE(AVG(total_amount), 0) AS avg_order_value
+		FROM orders
+		WHERE status IN ('PAID', 'CONFIRMED')
+			AND DATE(created_at) BETWEEN $1 AND $2
+	`
+
+	args := []interface{}{from, to}
+	argPos := 3
+
+	if role == "ADMIN" {
+		// Admin sees all
+	} else if role == "MANAGER" && organizationID != "" {
+		query += fmt.Sprintf(" AND organization_id = $%d", argPos)
+		args = append(args, organizationID)
+		argPos++
+	} else if branchID != "" {
+		query += fmt.Sprintf(" AND branch_id = $%d", argPos)
+		args = append(args, branchID)
+	}
+
+	query += " GROUP BY DATE(created_at) ORDER BY date DESC"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Failed to get sales report: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	reports := []SalesReport{}
+	for rows.Next() {
+		var r SalesReport
+		err := rows.Scan(&r.Date, &r.OrderCount, &r.TotalRevenue, &r.TotalDiscount, &r.TotalTax, &r.AvgOrderValue)
+		if err != nil {
+			log.Printf("Failed to scan row: %v", err)
+			continue
+		}
+		reports = append(reports, r)
+	}
+
+	writeJSON(w, http.StatusOK, reports)
+}
+
+func getTopItems(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID := r.Header.Get("X-Branch-ID")
+	organizationID := r.Header.Get("X-Organization-ID")
+	role := r.Header.Get("X-User-Role")
+
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	limitStr := r.URL.Query().Get("limit")
+
+	if from == "" {
+		from = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+	}
+	if to == "" {
+		to = time.Now().Format("2006-01-02")
+	}
+	limit := 10
+	if limitStr != "" {
+		fmt.Sscanf(limitStr, "%d", &limit)
+	}
+
+	query := `
+		SELECT 
+			oi.menu_item_name,
+			SUM(oi.quantity) AS quantity_sold,
+			SUM(oi.item_total) AS total_revenue
+		FROM order_items oi
+		JOIN orders o ON oi.order_id = o.id
+		WHERE o.status IN ('PAID', 'CONFIRMED')
+			AND DATE(o.created_at) BETWEEN $1 AND $2
+	`
+
+	args := []interface{}{from, to}
+	argPos := 3
+
+	if role == "ADMIN" {
+		// Admin sees all
+	} else if role == "MANAGER" && organizationID != "" {
+		query += fmt.Sprintf(" AND o.organization_id = $%d", argPos)
+		args = append(args, organizationID)
+		argPos++
+	} else if branchID != "" {
+		query += fmt.Sprintf(" AND o.branch_id = $%d", argPos)
+		args = append(args, branchID)
+		argPos++
+	}
+
+	query += fmt.Sprintf(" GROUP BY oi.menu_item_name ORDER BY quantity_sold DESC LIMIT $%d", argPos)
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Failed to get top items: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	items := []TopItem{}
+	for rows.Next() {
+		var item TopItem
+		err := rows.Scan(&item.MenuItemName, &item.QuantitySold, &item.TotalRevenue)
+		if err != nil {
+			log.Printf("Failed to scan row: %v", err)
+			continue
+		}
+		items = append(items, item)
+	}
+
+	writeJSON(w, http.StatusOK, items)
+}
+
+func getHourlySales(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID := r.Header.Get("X-Branch-ID")
+	organizationID := r.Header.Get("X-Organization-ID")
+	role := r.Header.Get("X-User-Role")
+
+	date := r.URL.Query().Get("date") // YYYY-MM-DD
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+
+	query := `
+		SELECT 
+			EXTRACT(HOUR FROM created_at)::INT AS hour,
+			COUNT(DISTINCT id) AS order_count,
+			COALESCE(SUM(total_amount), 0) AS total_revenue
+		FROM orders
+		WHERE status IN ('PAID', 'CONFIRMED')
+			AND DATE(created_at) = $1
+	`
+
+	args := []interface{}{date}
+	argPos := 2
+
+	if role == "ADMIN" {
+		// Admin sees all
+	} else if role == "MANAGER" && organizationID != "" {
+		query += fmt.Sprintf(" AND organization_id = $%d", argPos)
+		args = append(args, organizationID)
+		argPos++
+	} else if branchID != "" {
+		query += fmt.Sprintf(" AND branch_id = $%d", argPos)
+		args = append(args, branchID)
+	}
+
+	query += " GROUP BY hour ORDER BY hour"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Failed to get hourly sales: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	sales := []HourlySales{}
+	for rows.Next() {
+		var s HourlySales
+		err := rows.Scan(&s.Hour, &s.OrderCount, &s.TotalRevenue)
+		if err != nil {
+			log.Printf("Failed to scan row: %v", err)
+			continue
+		}
+		sales = append(sales, s)
+	}
+
+	writeJSON(w, http.StatusOK, sales)
 }

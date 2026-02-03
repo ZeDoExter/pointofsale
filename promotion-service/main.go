@@ -70,6 +70,15 @@ type ApplyRequest struct {
 	OrderID     string `json:"order_id"`
 }
 
+type PromotionReport struct {
+	PromotionID   string  `json:"promotion_id"`
+	PromotionName string  `json:"promotion_name"`
+	Code          *string `json:"code"`
+	UsageCount    int     `json:"usage_count"`
+	TotalDiscount float64 `json:"total_discount"`
+	IsActive      bool    `json:"is_active"`
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -132,6 +141,10 @@ func main() {
 		applyPromotion(db, w, r)
 	}).Methods(http.MethodPost)
 
+	router.HandleFunc("/api/reports/promotions", func(w http.ResponseWriter, r *http.Request) {
+		getPromotionReport(db, w, r)
+	}).Methods(http.MethodGet)
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
 		Handler: router,
@@ -192,10 +205,10 @@ func createPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":         promoID,
-		"name":       req.Name,
-		"branch_id":  branchID,
-		"is_active":  req.IsActive,
+		"id":        promoID,
+		"name":      req.Name,
+		"branch_id": branchID,
+		"is_active": req.IsActive,
 	})
 }
 
@@ -575,6 +588,76 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func getPromotionReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID := r.Header.Get("X-Branch-ID")
+	organizationID := r.Header.Get("X-Organization-ID")
+	role := r.Header.Get("X-User-Role")
+
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+
+	if from == "" {
+		from = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+	}
+	if to == "" {
+		to = time.Now().Format("2006-01-02")
+	}
+
+	query := `
+		SELECT 
+			p.id,
+			p.name,
+			p.code,
+			COUNT(DISTINCT pu.id) AS usage_count,
+			COALESCE(SUM(od.discount_amount), 0) AS total_discount,
+			p.is_active
+		FROM promotions p
+		LEFT JOIN promotion_usage pu ON p.id = pu.promotion_id 
+			AND DATE(pu.used_at) BETWEEN $1 AND $2
+		LEFT JOIN order_discounts od ON p.id = od.promotion_id 
+			AND DATE(od.applied_at) BETWEEN $1 AND $2
+		WHERE 1=1
+	`
+
+	args := []interface{}{from, to}
+	argPos := 3
+
+	if role == "ADMIN" {
+		// Admin sees all
+	} else if branchID != "" {
+		query += fmt.Sprintf(" AND p.branch_id = $%d", argPos)
+		args = append(args, branchID)
+		argPos++
+	} else if organizationID != "" {
+		query += fmt.Sprintf(" AND p.branch_id IN (SELECT id FROM branches WHERE organization_id = $%d)", argPos)
+		args = append(args, organizationID)
+		argPos++
+	}
+
+	query += " GROUP BY p.id ORDER BY usage_count DESC, total_discount DESC"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Failed to get promotion report: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	reports := []PromotionReport{}
+	for rows.Next() {
+		var r PromotionReport
+		err := rows.Scan(&r.PromotionID, &r.PromotionName, &r.Code, &r.UsageCount, &r.TotalDiscount, &r.IsActive)
+		if err != nil {
+			log.Printf("Failed to scan row: %v", err)
+			continue
+		}
+		reports = append(reports, r)
+	}
+
+	writeJSON(w, http.StatusOK, reports)
 }
 
 func joinStrings(strs []string, sep string) string {
