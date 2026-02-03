@@ -1,608 +1,367 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import '../App.css';
-import { orderAPI, sessionAPI } from '../services/api';
+import api, { orderAPI, sessionAPI } from '../services/api';
 
-const CashierDashboard = () => {
+const styles = {
+  page: { minHeight: '100vh', background: '#f1f5f9', display: 'flex', flexDirection: 'column' },
+  nav: {
+    background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+    padding: '12px 20px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  logo: { display: 'flex', alignItems: 'center', gap: '10px' },
+  logoIcon: {
+    width: '40px', height: '40px', background: 'rgba(255,255,255,0.2)',
+    borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: '20px',
+  },
+  logoText: { color: 'white', fontSize: '18px', fontWeight: 700 },
+  logoSub: { color: 'rgba(255,255,255,0.7)', fontSize: '12px' },
+  btnLogout: {
+    padding: '8px 16px', background: 'rgba(255,255,255,0.2)', color: 'white',
+    border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '13px', cursor: 'pointer',
+  },
+  main: { flex: 1, display: 'grid', gridTemplateColumns: '300px 1fr 350px', gap: '0', overflow: 'hidden' },
+  sidebar: { background: 'white', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  sidebarHeader: { padding: '16px', borderBottom: '1px solid #e2e8f0' },
+  sidebarTitle: { fontSize: '14px', fontWeight: 700, color: '#1e293b', marginBottom: '12px' },
+  sessionList: { flex: 1, overflow: 'auto', padding: '8px' },
+  sessionItem: {
+    padding: '12px', background: '#f8fafc', borderRadius: '10px', marginBottom: '8px',
+    cursor: 'pointer', border: '2px solid transparent', transition: 'all 0.2s',
+  },
+  sessionActive: { borderColor: '#10b981', background: '#ecfdf5' },
+  sessionTable: { fontWeight: 700, fontSize: '16px', color: '#1e293b' },
+  sessionMeta: { fontSize: '12px', color: '#64748b', marginTop: '4px' },
+  center: { display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  orderHeader: { padding: '16px 20px', background: 'white', borderBottom: '1px solid #e2e8f0' },
+  orderTitle: { fontSize: '18px', fontWeight: 700, color: '#1e293b' },
+  orderList: { flex: 1, overflow: 'auto', padding: '16px 20px' },
+  orderCard: {
+    background: 'white', borderRadius: '12px', padding: '16px', marginBottom: '12px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0',
+  },
+  orderCardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
+  orderCardId: { fontSize: '13px', color: '#64748b' },
+  badge: { padding: '4px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 600 },
+  itemRow: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #f1f5f9' },
+  itemName: { fontSize: '14px', color: '#1e293b' },
+  itemPrice: { fontSize: '14px', fontWeight: 600, color: '#1e293b' },
+  orderTotal: { display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '2px solid #e2e8f0', marginTop: '8px' },
+  totalLabel: { fontWeight: 700, color: '#1e293b' },
+  totalAmount: { fontWeight: 800, fontSize: '18px', color: '#10b981' },
+  actionBtns: { display: 'flex', gap: '8px', marginTop: '12px' },
+  btnConfirm: {
+    flex: 1, padding: '10px', background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+    color: 'white', border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '13px', cursor: 'pointer',
+  },
+  btnPaid: {
+    flex: 1, padding: '10px', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    color: 'white', border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '13px', cursor: 'pointer',
+  },
+  btnCancel: {
+    padding: '10px', background: '#fee2e2', color: '#dc2626',
+    border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '13px', cursor: 'pointer',
+  },
+  rightPanel: { background: 'white', borderLeft: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  panelHeader: { padding: '16px', borderBottom: '1px solid #e2e8f0' },
+  panelTitle: { fontSize: '14px', fontWeight: 700, color: '#1e293b' },
+  panelContent: { flex: 1, overflow: 'auto', padding: '16px' },
+  input: {
+    width: '100%', padding: '12px', borderRadius: '8px', border: '2px solid #e2e8f0',
+    fontSize: '14px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px',
+  },
+  btnPrimary: {
+    width: '100%', padding: '12px', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    color: 'white', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+  },
+  btnSecondary: {
+    width: '100%', padding: '12px', background: '#f1f5f9', color: '#475569',
+    border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '14px', cursor: 'pointer', marginTop: '8px',
+  },
+  qrBox: {
+    background: '#f8fafc', borderRadius: '12px', padding: '16px', textAlign: 'center', marginTop: '16px',
+  },
+  qrLabel: { fontSize: '12px', color: '#64748b', marginBottom: '8px' },
+  qrLink: { fontSize: '11px', color: '#3b82f6', wordBreak: 'break-all' },
+  emptyState: { textAlign: 'center', padding: '40px 20px', color: '#94a3b8' },
+  stats: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px' },
+  statBox: { background: '#f8fafc', borderRadius: '8px', padding: '12px', textAlign: 'center' },
+  statNum: { fontSize: '20px', fontWeight: 800 },
+  statLabel: { fontSize: '11px', color: '#64748b' },
+};
+
+export default function CashierDashboard() {
   const navigate = useNavigate();
-  const [orders, setOrders] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [sessionForm, setSessionForm] = useState({ table_number: '' });
-  const [activeSessionId, setActiveSessionId] = useState('');
-  const [showCreateOrder, setShowCreateOrder] = useState(false);
-  const [newOrder, setNewOrder] = useState({
-    table_id: '',
-    items: [{ item_name: '', price: '', quantity: 1 }]
-  });
+  const [activeSession, setActiveSession] = useState(null);
+  const [orders, setOrders] = useState([]);
+  const [tableNumber, setTableNumber] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const userName = localStorage.getItem('name') || 'Cashier';
   const branchName = localStorage.getItem('branch_name') || 'Branch';
 
   useEffect(() => {
-    fetchOrders();
-    fetchSessions();
+    loadSessions();
+    loadOrders();
+    const interval = setInterval(loadOrders, 30000);
+    return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    const active = sessions.find((s) => s.id === activeSessionId);
-    if (active) {
-      setNewOrder((prev) => ({ ...prev, table_id: active.table_id }));
-    }
-  }, [activeSessionId, sessions]);
-
-  const fetchSessions = async () => {
+  const loadSessions = async () => {
     try {
       const { data } = await sessionAPI.list({ status: 'OPEN' });
       const list = Array.isArray(data?.sessions) ? data.sessions : [];
       setSessions(list);
-      if (!activeSessionId && list.length > 0) {
-        setActiveSessionId(list[0].id);
+      if (list.length > 0 && !activeSession) {
+        setActiveSession(list[0]);
       }
     } catch (err) {
       console.error('Failed to load sessions:', err);
     }
   };
 
+  const loadOrders = async () => {
+    try {
+      const { data } = await api.get('/api/orders');
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.orders) ? data.orders : []);
+      setOrders(list);
+    } catch (err) {
+      console.error('Failed to load orders:', err);
+    }
+  };
+
   const createSession = async () => {
-    if (!sessionForm.table_number.trim()) {
-      alert('Please provide a table number');
+    const num = parseInt(tableNumber);
+    if (!num || num <= 0) {
+      alert('Please enter a valid table number');
       return;
     }
+    setLoading(true);
     try {
-      const tableNumber = Number(sessionForm.table_number);
-      if (Number.isNaN(tableNumber) || tableNumber <= 0) {
-        alert('Table number must be a positive number');
-        return;
-      }
-      const { data } = await sessionAPI.create(tableNumber);
-      const next = [data, ...sessions];
-      setSessions(next);
-      setActiveSessionId(data.id);
-      setSessionForm({ table_number: '' });
+      const { data } = await sessionAPI.create(num);
+      setSessions(prev => [data, ...prev]);
+      setActiveSession(data);
+      setTableNumber('');
     } catch (err) {
-      console.error('Failed to create session:', err);
       alert('Failed to create session');
     }
+    setLoading(false);
   };
 
   const closeSession = async (sessionId) => {
+    if (!window.confirm('Close this table session?')) return;
     try {
       await sessionAPI.close(sessionId);
-      setSessions((prev) => prev.map((s) => (
-        s.id === sessionId ? { ...s, is_active: false, closed_at: new Date().toISOString() } : s
-      )));
-      if (activeSessionId === sessionId) {
-        setActiveSessionId('');
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      if (activeSession?.id === sessionId) {
+        setActiveSession(sessions.find(s => s.id !== sessionId) || null);
       }
     } catch (err) {
-      console.error('Failed to close session:', err);
       alert('Failed to close session');
-    }
-  };
-
-  const sessionLink = (session) => {
-    const base = window.location.origin;
-    const params = new URLSearchParams({ session: session.token, table: session.table_number });
-    return `${base}/user?${params.toString()}`;
-  };
-
-  const createOrder = async () => {
-    try {
-      const userId = localStorage.getItem('user_id');
-      const activeSession = sessions.find((s) => s.id === activeSessionId);
-      const items = newOrder.items
-        .filter(item => item.item_name && !Number.isNaN(Number(item.price)))
-        .map(item => ({
-          item_name: item.item_name,
-          price: Number(item.price),
-          quantity: Number(item.quantity) || 1,
-        }));
-
-      if (items.length === 0) {
-        alert('Please add at least one item');
-        return;
-      }
-
-      await orderAPI.create({
-        table_id: newOrder.table_id || activeSession?.table_id || '',
-        items,
-        created_by: userId,
-        qr_session_token: activeSession?.token,
-      });
-
-      alert('Order created successfully!');
-      setShowCreateOrder(false);
-      setNewOrder({ table_id: activeSession?.table_id || '', items: [{ item_name: '', price: '', quantity: 1 }] });
-      fetchOrders();
-    } catch (error) {
-      console.error('Failed to create order:', error);
-      alert('Failed to create order');
     }
   };
 
   const updateOrderStatus = async (orderId, status) => {
     try {
       await orderAPI.updateStatus(orderId, status);
-      alert('Order status updated!');
-      fetchOrders();
-    } catch (error) {
-      console.error('Failed to update order:', error);
+      loadOrders();
+    } catch (err) {
+      alert('Failed to update order');
     }
-  };
-
-  const addItem = () => {
-    setNewOrder({
-      ...newOrder,
-      items: [...newOrder.items, { item_name: '', price: '', quantity: 1 }]
-    });
-  };
-
-  const updateItem = (index, field, value) => {
-    const items = [...newOrder.items];
-    items[index][field] = field === 'quantity' ? Number(value) || 1 : value;
-    setNewOrder({ ...newOrder, items });
-  };
-
-  const removeItem = (index) => {
-    const items = newOrder.items.filter((_, i) => i !== index);
-    setNewOrder({ ...newOrder, items });
-  };
-
-  const toggleCreateOrder = () => {
-    const active = sessions.find((s) => s.id === activeSessionId);
-    setNewOrder((prev) => ({ ...prev, table_id: prev.table_id || active?.table_id || '' }));
-    setShowCreateOrder(!showCreateOrder);
   };
 
   const handleLogout = () => {
     localStorage.clear();
-    navigate('/');
+    navigate('/admin/login');
   };
 
   const getStatusColor = (status) => {
-    switch (status) {
-      case 'OPEN': return '#fbbf24';
-      case 'CONFIRMED': return '#10b981';
-      case 'PAID': return '#3b82f6';
-      case 'CANCELLED': return '#ef4444';
-      default: return '#6b7280';
-    }
+    const colors = {
+      'OPEN': '#f59e0b', 'CONFIRMED': '#3b82f6', 'PREPARING': '#8b5cf6',
+      'READY': '#10b981', 'PAID': '#06b6d4', 'CANCELLED': '#ef4444',
+    };
+    return colors[status] || '#64748b';
   };
 
-  return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f3f4f6' }}>
-      {/* Header */}
-      <div style={{
-        backgroundColor: '#1f2937',
-        color: 'white',
-        padding: '20px 30px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-      }}>
-        <div>
-          <h1 style={{ fontSize: '28px', fontWeight: 'bold', margin: 0 }}>💰 Cashier POS</h1>
-          <p style={{ margin: '5px 0 0 0', color: '#9ca3af' }}>{userName} - {branchName}</p>
-        </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button
-            onClick={handleLogout}
-            style={{
-              padding: '10px 20px',
-              backgroundColor: '#ef4444',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </div>
+  const getSessionLink = (session) => {
+    if (!session) return '';
+    const base = window.location.origin;
+    const params = new URLSearchParams({ session: session.token, table: session.table_number });
+    return `${base}/user?${params.toString()}`;
+  };
 
-      {/* Main Content */}
-      <div style={{ padding: '30px' }}>
-        {/* Table Sessions */}
-        <div style={{ marginBottom: '24px', backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div>
-              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>Table Sessions</h2>
-              <p style={{ margin: 0, color: '#6b7280' }}>Open a session to generate a QR link for guests; tie orders to that table.</p>
-            </div>
-            <button
-              onClick={fetchOrders}
-              style={{ padding: '10px 16px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
-            >
-              🔄 Refresh Orders
+  const sessionOrders = activeSession
+    ? orders.filter(o => o.qr_session_token === activeSession.token || o.table_id === String(activeSession.table_number))
+    : orders;
+
+  const todayRevenue = orders
+    .filter(o => o.status === 'PAID')
+    .reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+
+  const pendingCount = orders.filter(o => ['OPEN', 'CONFIRMED', 'PREPARING'].includes(o.status)).length;
+
+  return (
+    <div style={styles.page}>
+      {/* Nav */}
+      <nav style={styles.nav}>
+        <div style={styles.logo}>
+          <div style={styles.logoIcon}>💰</div>
+          <div>
+            <div style={styles.logoText}>Cashier POS</div>
+            <div style={styles.logoSub}>{userName} • {branchName}</div>
+          </div>
+        </div>
+        <button style={styles.btnLogout} onClick={handleLogout}>Logout</button>
+      </nav>
+
+      <div style={styles.main}>
+        {/* Left: Sessions */}
+        <div style={styles.sidebar}>
+          <div style={styles.sidebarHeader}>
+            <div style={styles.sidebarTitle}>📋 Table Sessions</div>
+            <input
+              type="number"
+              placeholder="Table number..."
+              value={tableNumber}
+              onChange={(e) => setTableNumber(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && createSession()}
+              style={styles.input}
+            />
+            <button onClick={createSession} style={styles.btnPrimary} disabled={loading}>
+              + Open Table
             </button>
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-            <div style={{ border: '1px dashed #d1d5db', borderRadius: '10px', padding: '12px' }}>
-              <h4 style={{ margin: '0 0 8px 0' }}>Open Session</h4>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <input
-                  type="text"
-                  placeholder="Table number"
-                  value={sessionForm.table_number}
-                  onChange={(e) => setSessionForm({ table_number: e.target.value })}
-                  style={{ flex: 1, padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }}
-                />
-                <button
-                  onClick={createSession}
-                  style={{ padding: '10px 16px', backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+          <div style={styles.sessionList}>
+            {sessions.length === 0 ? (
+              <div style={styles.emptyState}>No open tables</div>
+            ) : (
+              sessions.map(s => (
+                <div
+                  key={s.id}
+                  style={{ ...styles.sessionItem, ...(activeSession?.id === s.id ? styles.sessionActive : {}) }}
+                  onClick={() => setActiveSession(s)}
                 >
-                  Open
-                </button>
-              </div>
-            </div>
-
-            {activeSessionId && (
-              <div style={{ border: '1px solid #d1d5db', borderRadius: '10px', padding: '12px', backgroundColor: '#f0fdf4' }}>
-                <h4 style={{ margin: '0 0 6px 0' }}>Active Session</h4>
-                {(() => {
-                  const session = sessions.find((s) => s.id === activeSessionId);
-                  if (!session) return null;
-                  return (
-                    <div>
-                      <div style={{ fontWeight: 'bold' }}>Table {session.table_number}</div>
-                      <div style={{ color: '#6b7280', fontSize: '13px' }}>Status: {session.is_active ? 'OPEN' : 'CLOSED'}</div>
-                      <div style={{ marginTop: '8px', fontSize: '12px' }}>
-                        Share: <a href={sessionLink(session)}>{sessionLink(session)}</a>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
+                  <div style={styles.sessionTable}>🍽️ Table {s.table_number}</div>
+                  <div style={styles.sessionMeta}>
+                    {new Date(s.created_at).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+              ))
             )}
           </div>
-
-          {sessions.length > 0 && (
-            <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
-              {sessions.map((session) => (
-                <div key={session.id} style={{
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '12px',
-                  padding: '14px',
-                  backgroundColor: activeSessionId === session.id ? '#eff6ff' : '#f9fafb'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 'bold' }}>Table {session.table_number}</div>
-                      <div style={{ color: '#6b7280', fontSize: '12px' }}>Token: {session.token.slice(0, 8)}...</div>
-                    </div>
-                    <span style={{
-                      padding: '4px 10px',
-                      borderRadius: '9999px',
-                      fontSize: '11px',
-                      backgroundColor: session.is_active ? '#d1fae5' : '#fef3c7',
-                      color: session.is_active ? '#065f46' : '#92400e',
-                      fontWeight: 'bold'
-                    }}>
-                      {session.is_active ? 'OPEN' : 'CLOSED'}
-                    </span>
-                  </div>
-                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#4b5563', wordBreak: 'break-all' }}>
-                    {sessionLink(session)}
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                    <button
-                      onClick={() => setActiveSessionId(session.id)}
-                      style={{ flex: 1, padding: '8px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
-                    >
-                      Use
-                    </button>
-                    <button
-                      onClick={() => closeSession(session.id)}
-                      disabled={!session.is_active}
-                      style={{ flex: 1, padding: '8px', backgroundColor: session.is_active ? '#ef4444' : '#9ca3af', color: 'white', border: 'none', borderRadius: '8px', cursor: session.is_active ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}
-                    >
-                      Close
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
-        {/* Action Bar */}
-        <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
-          <button
-            onClick={toggleCreateOrder}
-            style={{
-              padding: '12px 24px',
-              backgroundColor: '#10b981',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-              fontSize: '16px'
-            }}
-          >
-            ➕ New Order
-          </button>
-          <button
-            onClick={fetchOrders}
-            style={{
-              padding: '12px 24px',
-              backgroundColor: '#3b82f6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-          >
-            🔄 Refresh
-          </button>
-        </div>
-
-        {/* Create Order Form */}
-        {showCreateOrder && (
-          <div style={{
-            backgroundColor: 'white',
-            padding: '30px',
-            borderRadius: '12px',
-            marginBottom: '30px',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-          }}>
-            <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px' }}>Create New Order</h2>
-            
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
-                Table Number (optional)
-              </label>
-              <input
-                type="text"
-                value={newOrder.table_id}
-                onChange={(e) => setNewOrder({ ...newOrder, table_id: e.target.value })}
-                placeholder="e.g., 5"
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '6px',
-                  fontSize: '16px'
-                }}
-              />
-            </div>
-
-            <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '15px' }}>Items</h3>
-            {newOrder.items.map((item, index) => (
-              <div key={index} style={{
-                display: 'grid',
-                gridTemplateColumns: '2fr 1fr 1fr auto',
-                gap: '10px',
-                marginBottom: '10px',
-                alignItems: 'end'
-              }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>Item Name</label>
-                  <input
-                    type="text"
-                    value={item.item_name}
-                    onChange={(e) => updateItem(index, 'item_name', e.target.value)}
-                    placeholder="e.g., Pad Thai"
-                    style={{
-                      width: '100%',
-                      padding: '10px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>Price</label>
-                  <input
-                    type="number"
-                    value={item.price}
-                    onChange={(e) => updateItem(index, 'price', parseFloat(e.target.value))}
-                    placeholder="0.00"
-                    style={{
-                      width: '100%',
-                      padding: '10px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>Qty</label>
-                  <input
-                    type="number"
-                    value={item.quantity}
-                    onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value))}
-                    min="1"
-                    style={{
-                      width: '100%',
-                      padding: '10px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px'
-                    }}
-                  />
-                </div>
-                <button
-                  onClick={() => removeItem(index)}
-                  style={{
-                    padding: '10px 15px',
-                    backgroundColor: '#ef4444',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-
-            <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-              <button
-                onClick={addItem}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#6b7280',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer'
-                }}
-              >
-                + Add Item
-              </button>
-              <button
-                onClick={createOrder}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#10b981',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontWeight: 'bold'
-                }}
-              >
-                Create Order
-              </button>
-              <button
-                onClick={() => setShowCreateOrder(false)}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#d1d5db',
-                  color: '#374151',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancel
-              </button>
+        {/* Center: Orders */}
+        <div style={styles.center}>
+          <div style={styles.orderHeader}>
+            <div style={styles.orderTitle}>
+              {activeSession ? `Table ${activeSession.table_number} Orders` : 'All Orders'}
             </div>
           </div>
-        )}
+          <div style={styles.orderList}>
+            {sessionOrders.length === 0 ? (
+              <div style={styles.emptyState}>
+                <p style={{ fontSize: '48px', marginBottom: '16px' }}>📭</p>
+                <p>No orders yet</p>
+              </div>
+            ) : (
+              sessionOrders.map(order => (
+                <div key={order.id} style={styles.orderCard}>
+                  <div style={styles.orderCardHeader}>
+                    <span style={styles.orderCardId}>#{order.id?.slice(0, 8)}</span>
+                    <span style={{ ...styles.badge, background: getStatusColor(order.status) + '20', color: getStatusColor(order.status) }}>
+                      {order.status}
+                    </span>
+                  </div>
+                  
+                  {Array.isArray(order.items) && order.items.map((item, i) => (
+                    <div key={i} style={styles.itemRow}>
+                      <span style={styles.itemName}>{item.quantity}x {item.item_name || item.name}</span>
+                      <span style={styles.itemPrice}>฿{Number(item.price || 0).toLocaleString()}</span>
+                    </div>
+                  ))}
 
-        {/* Orders List */}
-        <div>
-          <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px' }}>Active Orders</h2>
-          {orders.length === 0 ? (
-            <div style={{
-              backgroundColor: 'white',
-              padding: '60px',
-              borderRadius: '12px',
-              textAlign: 'center',
-              color: '#9ca3af'
-            }}>
-              No orders yet
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '20px' }}>
-              {orders.map((order) => (
-                <div
-                  key={order.id}
-                  style={{
-                    backgroundColor: 'white',
-                    borderRadius: '12px',
-                    padding: '20px',
-                    borderLeft: `6px solid ${getStatusColor(order.status)}`,
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
-                    <div>
-                      <h3 style={{ fontSize: '24px', fontWeight: 'bold', margin: 0 }}>
-                        Order #{order.order_number}
-                      </h3>
-                      <span style={{
-                        display: 'inline-block',
-                        marginTop: '8px',
-                        padding: '4px 12px',
-                        borderRadius: '9999px',
-                        fontSize: '12px',
-                        fontWeight: 'bold',
-                        backgroundColor: getStatusColor(order.status),
-                        color: 'white'
-                      }}>
-                        {order.status}
-                      </span>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#10b981' }}>
-                        ฿{Number(order.total_amount || 0).toFixed(2)}
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
-                        {order.created_at ? new Date(order.created_at).toLocaleString() : '-'}
-                      </div>
-                    </div>
+                  <div style={styles.orderTotal}>
+                    <span style={styles.totalLabel}>Total</span>
+                    <span style={styles.totalAmount}>฿{Number(order.total_amount || 0).toLocaleString()}</span>
                   </div>
 
-                  {order.status === 'OPEN' && (
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '15px' }}>
-                      <button
-                        onClick={() => updateOrderStatus(order.id, 'CONFIRMED')}
-                        style={{
-                          flex: 1,
-                          padding: '8px',
-                          backgroundColor: '#10b981',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                          fontSize: '14px'
-                        }}
-                      >
-                        ✓ Confirm
-                      </button>
-                      <button
-                        onClick={() => updateOrderStatus(order.id, 'CANCELLED')}
-                        style={{
-                          flex: 1,
-                          padding: '8px',
-                          backgroundColor: '#ef4444',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                          fontSize: '14px'
-                        }}
-                      >
-                        ✕ Cancel
+                  {order.status !== 'PAID' && order.status !== 'CANCELLED' && (
+                    <div style={styles.actionBtns}>
+                      {order.status === 'OPEN' && (
+                        <button style={styles.btnConfirm} onClick={() => updateOrderStatus(order.id, 'CONFIRMED')}>
+                          ✓ Confirm
+                        </button>
+                      )}
+                      {(order.status === 'CONFIRMED' || order.status === 'READY') && (
+                        <button style={styles.btnPaid} onClick={() => updateOrderStatus(order.id, 'PAID')}>
+                          💵 Mark Paid
+                        </button>
+                      )}
+                      <button style={styles.btnCancel} onClick={() => updateOrderStatus(order.id, 'CANCELLED')}>
+                        ✕
                       </button>
                     </div>
                   )}
-
-                  {order.status === 'CONFIRMED' && (
-                    <button
-                      onClick={() => updateOrderStatus(order.id, 'PAID')}
-                      style={{
-                        width: '100%',
-                        padding: '10px',
-                        backgroundColor: '#3b82f6',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        fontSize: '14px',
-                        fontWeight: 'bold',
-                        marginTop: '15px'
-                      }}
-                    >
-                      💳 Mark as Paid
-                    </button>
-                  )}
                 </div>
-              ))}
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Right: Panel */}
+        <div style={styles.rightPanel}>
+          <div style={styles.panelHeader}>
+            <div style={styles.panelTitle}>📊 Quick Stats</div>
+          </div>
+          <div style={styles.panelContent}>
+            <div style={styles.stats}>
+              <div style={styles.statBox}>
+                <div style={{ ...styles.statNum, color: '#10b981' }}>฿{todayRevenue.toLocaleString()}</div>
+                <div style={styles.statLabel}>Today Revenue</div>
+              </div>
+              <div style={styles.statBox}>
+                <div style={{ ...styles.statNum, color: '#f59e0b' }}>{pendingCount}</div>
+                <div style={styles.statLabel}>Pending</div>
+              </div>
+              <div style={styles.statBox}>
+                <div style={{ ...styles.statNum, color: '#3b82f6' }}>{sessions.length}</div>
+                <div style={styles.statLabel}>Open Tables</div>
+              </div>
+              <div style={styles.statBox}>
+                <div style={{ ...styles.statNum, color: '#8b5cf6' }}>{orders.length}</div>
+                <div style={styles.statLabel}>Total Orders</div>
+              </div>
             </div>
-          )}
+
+            {activeSession && (
+              <>
+                <div style={styles.qrBox}>
+                  <div style={styles.qrLabel}>Customer QR Link for Table {activeSession.table_number}</div>
+                  <div style={styles.qrLink}>{getSessionLink(activeSession)}</div>
+                  <button
+                    style={{ ...styles.btnSecondary, marginTop: '12px' }}
+                    onClick={() => navigator.clipboard.writeText(getSessionLink(activeSession))}
+                  >
+                    📋 Copy Link
+                  </button>
+                </div>
+
+                <button
+                  style={{ ...styles.btnSecondary, background: '#fee2e2', color: '#dc2626', marginTop: '16px' }}
+                  onClick={() => closeSession(activeSession.id)}
+                >
+                  Close Table {activeSession.table_number}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
-};
-
-export default CashierDashboard;
+}

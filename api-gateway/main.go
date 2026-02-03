@@ -63,6 +63,7 @@ func main() {
 	router.PathPrefix("/api/auth").Handler(proxyTo(services["auth"]))
 	router.PathPrefix("/api/organizations").Handler(proxyTo(services["auth"]))
 	router.PathPrefix("/api/users").Handler(proxyTo(services["auth"]))
+	router.PathPrefix("/api/manager").Handler(proxyTo(services["auth"])) // Manager-specific endpoints
 	router.PathPrefix("/api/orders").Handler(proxyTo(services["order"]))
 	router.PathPrefix("/api/promotions").Handler(proxyTo(services["promotion"]))
 	router.PathPrefix("/api/payments").Handler(proxyTo(services["payment"]))
