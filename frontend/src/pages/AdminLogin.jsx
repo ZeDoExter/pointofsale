@@ -14,7 +14,7 @@ export default function AdminLogin() {
     try {
       const { data } = await authAPI.login(username, password);
       localStorage.setItem('token', data.access_token);
-      localStorage.setItem('role', data.role);
+      localStorage.setItem('role', data.role.toUpperCase());
       localStorage.setItem('name', data.name);
       localStorage.setItem('username', data.username);
       localStorage.setItem('user_id', data.user_id || data.id || '');
@@ -61,7 +61,7 @@ export default function AdminLogin() {
         </h1>
         <form onSubmit={handleLogin}>
           <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Username</label>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#374151' }}>Username</label>
             <input
               type="text"
               placeholder="Enter username"
@@ -71,13 +71,16 @@ export default function AdminLogin() {
                 width: '100%',
                 padding: '12px',
                 fontSize: '16px',
-                border: '1px solid #d1d5db',
-                borderRadius: '6px'
+                border: '2px solid #d1d5db',
+                borderRadius: '6px',
+                color: '#1f2937',
+                backgroundColor: '#ffffff',
+                boxSizing: 'border-box'
               }}
             />
           </div>
           <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Password</label>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#374151' }}>Password</label>
             <input
               type="password"
               placeholder="Enter password"
@@ -87,8 +90,11 @@ export default function AdminLogin() {
                 width: '100%',
                 padding: '12px',
                 fontSize: '16px',
-                border: '1px solid #d1d5db',
-                borderRadius: '6px'
+                border: '2px solid #d1d5db',
+                borderRadius: '6px',
+                color: '#1f2937',
+                backgroundColor: '#ffffff',
+                boxSizing: 'border-box'
               }}
             />
           </div>

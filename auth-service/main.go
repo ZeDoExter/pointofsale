@@ -122,15 +122,14 @@ func main() {
 			return
 		}
 
-		// Query user with org/branch context
-		var userID, passwordHash, role, fullName, email string
-		var organizationID, branchID sql.NullString
+		// Query user
+		var userID, passwordHash, role, fullName string
 		var isActive bool
 		err := db.QueryRow(`
-			SELECT u.id, u.password_hash, u.role, u.full_name, u.email, u.organization_id, u.branch_id, u.is_active
+			SELECT u.id, u.password_hash, u.role, u.name, u.is_active
 			FROM users u
 			WHERE u.username = $1
-		`, req.Username).Scan(&userID, &passwordHash, &role, &fullName, &email, &organizationID, &branchID, &isActive)
+		`, req.Username).Scan(&userID, &passwordHash, &role, &fullName, &isActive)
 
 		if err == sql.ErrNoRows {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_credentials"})
@@ -153,23 +152,14 @@ func main() {
 		// TODO: Add password verification (bcrypt)
 		// For now, accepting any password for development
 
-		// Build JWT claims with scope
+		// Build JWT claims
 		claims := jwt.MapClaims{
 			"sub":      userID,
 			"username": req.Username,
 			"role":     role,
 			"name":     fullName,
-			"email":    email,
 			"iat":      time.Now().Unix(),
 			"exp":      time.Now().Add(8 * time.Hour).Unix(),
-		}
-
-		// Add org/branch context based on role
-		if organizationID.Valid {
-			claims["organization_id"] = organizationID.String
-		}
-		if branchID.Valid {
-			claims["branch_id"] = branchID.String
 		}
 
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -185,13 +175,6 @@ func main() {
 			"role":         role,
 			"username":     req.Username,
 			"name":         fullName,
-		}
-
-		if organizationID.Valid {
-			response["organization_id"] = organizationID.String
-		}
-		if branchID.Valid {
-			response["branch_id"] = branchID.String
 		}
 
 		writeJSON(w, http.StatusOK, response)
@@ -298,18 +281,13 @@ func main() {
 		userID := claims["sub"].(string)
 
 		// Get fresh user data from database
-		var fullName, email, role, username string
-		var organizationID, branchID sql.NullString
-		var orgName, branchName sql.NullString
+		var fullName, role, username string
 
 		err = db.QueryRow(`
-			SELECT u.username, u.full_name, u.email, u.role, u.organization_id, u.branch_id,
-			       o.name as org_name, b.name as branch_name
+			SELECT u.username, u.name, u.role
 			FROM users u
-			LEFT JOIN organizations o ON u.organization_id = o.id
-			LEFT JOIN branches b ON u.branch_id = b.id
 			WHERE u.id = $1 AND u.is_active = true
-		`, userID).Scan(&username, &fullName, &email, &role, &organizationID, &branchID, &orgName, &branchName)
+		`, userID).Scan(&username, &fullName, &role)
 
 		if err != nil {
 			log.Printf("Failed to get user: %v", err)
@@ -321,21 +299,7 @@ func main() {
 			"id":       userID,
 			"username": username,
 			"name":     fullName,
-			"email":    email,
 			"role":     role,
-		}
-
-		if organizationID.Valid {
-			response["organization_id"] = organizationID.String
-			if orgName.Valid {
-				response["organization_name"] = orgName.String
-			}
-		}
-		if branchID.Valid {
-			response["branch_id"] = branchID.String
-			if branchName.Valid {
-				response["branch_name"] = branchName.String
-			}
 		}
 
 		writeJSON(w, http.StatusOK, response)
