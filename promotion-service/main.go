@@ -18,19 +18,21 @@ import (
 )
 
 type Promotion struct {
-	ID            string     `json:"id"`
-	Code          *string    `json:"code"`
-	Name          string     `json:"name"`
-	DiscountType  string     `json:"discount_type"`
-	DiscountValue float64    `json:"discount_value"`
-	MaxDiscount   *float64   `json:"max_discount"`
-	MinOrderTotal *float64   `json:"min_order_total"`
-	ValidFrom     *time.Time `json:"valid_from"`
-	ValidUntil    *time.Time `json:"valid_until"`
-	MaxUsageCount *int       `json:"max_usage_count"`
-	IsActive      bool       `json:"is_active"`
-	CreatedAt     *time.Time `json:"created_at,omitempty"`
-	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+	ID             string     `json:"id"`
+	Code           *string    `json:"code"`
+	Name           string     `json:"name"`
+	OrganizationID *string    `json:"organization_id,omitempty"`
+	BranchID       *string    `json:"branch_id,omitempty"`
+	DiscountType   string     `json:"discount_type"`
+	DiscountValue  float64    `json:"discount_value"`
+	MaxDiscount    *float64   `json:"max_discount"`
+	MinOrderTotal  *float64   `json:"min_order_total"`
+	ValidFrom      *time.Time `json:"valid_from"`
+	ValidUntil     *time.Time `json:"valid_until"`
+	MaxUsageCount  *int       `json:"max_usage_count"`
+	IsActive       bool       `json:"is_active"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
 }
 
 type CreatePromotionRequest struct {
@@ -76,6 +78,39 @@ type PromotionReport struct {
 	UsageCount    int     `json:"usage_count"`
 	TotalDiscount float64 `json:"total_discount"`
 	IsActive      bool    `json:"is_active"`
+}
+
+// tenantContext extracts organization and branch context from gateway headers.
+func tenantContext(r *http.Request) (branchID, orgID string) {
+	return r.Header.Get("X-Branch-ID"), r.Header.Get("X-Organization-ID")
+}
+
+// nullable converts empty strings to NULL for SQL parameters.
+func nullable(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// ensureOrgFromBranch fetches organization_id when branch context is provided.
+func ensureOrgFromBranch(db *sql.DB, branchID, orgID string) (string, string, error) {
+	if branchID == "" {
+		return branchID, orgID, nil
+	}
+
+	if orgID != "" {
+		return branchID, orgID, nil
+	}
+
+	var bOrg sql.NullString
+	if err := db.QueryRow(`SELECT organization_id FROM branches WHERE id = $1`, branchID).Scan(&bOrg); err != nil {
+		return branchID, orgID, err
+	}
+	if bOrg.Valid {
+		orgID = bOrg.String
+	}
+	return branchID, orgID, nil
 }
 
 func main() {
@@ -169,6 +204,17 @@ func createPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, err := ensureOrgFromBranch(db, branchID, orgID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_branch"})
+		return
+	}
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_tenant_context"})
+		return
+	}
+
 	var req CreatePromotionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
@@ -186,10 +232,10 @@ func createPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	promoID := uuid.New().String()
-	_, err := db.Exec(`
-		INSERT INTO promotions (id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, promoID, req.Code, req.Name, req.DiscountType, req.DiscountValue, req.MaxDiscount, req.MinOrderTotal, req.ValidFrom, req.ValidUntil, req.MaxUsageCount, req.IsActive)
+	_, err = db.Exec(`
+		INSERT INTO promotions (id, organization_id, branch_id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, promoID, nullable(orgID), nullable(branchID), req.Code, req.Name, req.DiscountType, req.DiscountValue, req.MaxDiscount, req.MinOrderTotal, req.ValidFrom, req.ValidUntil, req.MaxUsageCount, req.IsActive)
 
 	if err != nil {
 		log.Printf("Failed to create promotion: %v", err)
@@ -211,14 +257,33 @@ func listPromotions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var rows *sql.Rows
-	var err error
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, err := ensureOrgFromBranch(db, branchID, orgID)
+	if err != nil {
+		log.Printf("Failed to resolve org from branch: %v", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_branch"})
+		return
+	}
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_tenant_context"})
+		return
+	}
 
-	rows, err = db.Query(`
-		SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, created_at, updated_at
+	query := `
+		SELECT id, organization_id, branch_id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, created_at, updated_at
 		FROM promotions
-		ORDER BY created_at DESC
-	`)
+		WHERE 1=1`
+	var args []interface{}
+	if branchID != "" {
+		query += " AND (branch_id = $1 OR (branch_id IS NULL AND organization_id = $2))"
+		args = append(args, branchID, orgID)
+	} else {
+		query += " AND (organization_id = $1 OR organization_id IS NULL)"
+		args = append(args, orgID)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := db.Query(query, args...)
 
 	if err != nil {
 		log.Printf("Failed to list promotions: %v", err)
@@ -230,10 +295,17 @@ func listPromotions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	promotions := []Promotion{}
 	for rows.Next() {
 		var p Promotion
-		err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+		var orgVal, branchVal sql.NullString
+		err := rows.Scan(&p.ID, &orgVal, &branchVal, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 		if err != nil {
 			log.Printf("Failed to scan promotion: %v", err)
 			continue
+		}
+		if orgVal.Valid {
+			p.OrganizationID = &orgVal.String
+		}
+		if branchVal.Valid {
+			p.BranchID = &branchVal.String
 		}
 		promotions = append(promotions, p)
 	}
@@ -244,13 +316,34 @@ func listPromotions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 func getPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, err := ensureOrgFromBranch(db, branchID, orgID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_branch"})
+		return
+	}
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_tenant_context"})
+		return
+	}
+
+	query := `
+		SELECT id, organization_id, branch_id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, created_at, updated_at
+		FROM promotions
+		WHERE id = $1`
+	args := []interface{}{id}
+
+	if branchID != "" {
+		query += " AND (branch_id = $2 OR (branch_id IS NULL AND organization_id = $3))"
+		args = append(args, branchID, orgID)
+	} else {
+		query += " AND (organization_id = $2 OR organization_id IS NULL)"
+		args = append(args, orgID)
+	}
 
 	var p Promotion
-	err := db.QueryRow(`
-		SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, created_at, updated_at
-		FROM promotions
-		WHERE id = $1
-	`, id).Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+	var orgVal, branchVal sql.NullString
+	err = db.QueryRow(query, args...).Scan(&p.ID, &orgVal, &branchVal, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "promotion_not_found"})
@@ -260,6 +353,12 @@ func getPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to get promotion: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
 		return
+	}
+	if orgVal.Valid {
+		p.OrganizationID = &orgVal.String
+	}
+	if branchVal.Valid {
+		p.BranchID = &branchVal.String
 	}
 
 	writeJSON(w, http.StatusOK, p)
@@ -272,6 +371,17 @@ func updatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	role := r.Header.Get("X-User-Role")
 	if role != "ADMIN" && role != "MANAGER" {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, err := ensureOrgFromBranch(db, branchID, orgID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_branch"})
+		return
+	}
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_tenant_context"})
 		return
 	}
 
@@ -341,8 +451,14 @@ func updatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	args = append(args, time.Now())
 	argPos++
 
-	query := fmt.Sprintf("UPDATE promotions SET %s WHERE id = $%d", joinStrings(updates, ", "), argPos)
-	args = append(args, id)
+	var query string
+	if branchID != "" {
+		query = fmt.Sprintf("UPDATE promotions SET %s WHERE id = $%d AND (branch_id = $%d OR (branch_id IS NULL AND organization_id = $%d))", joinStrings(updates, ", "), argPos, argPos+1, argPos+2)
+		args = append(args, id, branchID, orgID)
+	} else {
+		query = fmt.Sprintf("UPDATE promotions SET %s WHERE id = $%d AND (organization_id = $%d OR organization_id IS NULL)", joinStrings(updates, ", "), argPos, argPos+1)
+		args = append(args, id, orgID)
+	}
 
 	result, err := db.Exec(query, args...)
 	if err != nil {
@@ -370,10 +486,24 @@ func deletePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var result sql.Result
-	var err error
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, err := ensureOrgFromBranch(db, branchID, orgID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_branch"})
+		return
+	}
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_tenant_context"})
+		return
+	}
 
-	result, err = db.Exec(`DELETE FROM promotions WHERE id = $1`, id)
+	var result sql.Result
+
+	if branchID != "" {
+		result, err = db.Exec(`DELETE FROM promotions WHERE id = $1 AND (branch_id = $2 OR (branch_id IS NULL AND organization_id = $3))`, id, branchID, orgID)
+	} else {
+		result, err = db.Exec(`DELETE FROM promotions WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`, id, orgID)
+	}
 
 	if err != nil {
 		log.Printf("Failed to delete promotion: %v", err)
@@ -397,19 +527,33 @@ func evaluatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, _ = ensureOrgFromBranch(db, branchID, orgID)
+
 	if req.Code == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code_required"})
 		return
 	}
 
-	var promo Promotion
-	err := db.QueryRow(`
-		SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total,
+	query := `
+		SELECT id, organization_id, branch_id, code, name, discount_type, discount_value, max_discount, min_order_total,
 		       valid_from, valid_until, max_usage_count, is_active
 		FROM promotions
-		WHERE code = $1 AND is_active = true
-	`, req.Code).Scan(
-		&promo.ID, &promo.Code, &promo.Name, &promo.DiscountType, &promo.DiscountValue,
+		WHERE code = $1 AND is_active = true`
+	args := []interface{}{req.Code}
+
+	if branchID != "" {
+		query += fmt.Sprintf(" AND (branch_id = $%d OR (branch_id IS NULL AND organization_id = $%d))", len(args)+1, len(args)+2)
+		args = append(args, branchID, orgID)
+	} else if orgID != "" {
+		query += fmt.Sprintf(" AND (organization_id = $%d OR organization_id IS NULL)", len(args)+1)
+		args = append(args, orgID)
+	}
+
+	var promo Promotion
+	var orgVal, branchVal sql.NullString
+	err := db.QueryRow(query, args...).Scan(
+		&promo.ID, &orgVal, &branchVal, &promo.Code, &promo.Name, &promo.DiscountType, &promo.DiscountValue,
 		&promo.MaxDiscount, &promo.MinOrderTotal, &promo.ValidFrom, &promo.ValidUntil,
 		&promo.MaxUsageCount, &promo.IsActive,
 	)
@@ -479,9 +623,24 @@ func applyPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, err := ensureOrgFromBranch(db, branchID, orgID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_branch"})
+		return
+	}
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_tenant_context"})
+		return
+	}
+
 	// Verify promotion exists
 	var promoID string
-	err := db.QueryRow(`SELECT id FROM promotions WHERE id = $1`, req.PromotionID).Scan(&promoID)
+	if branchID != "" {
+		err = db.QueryRow(`SELECT id FROM promotions WHERE id = $1 AND (branch_id = $2 OR (branch_id IS NULL AND organization_id = $3))`, req.PromotionID, branchID, orgID).Scan(&promoID)
+	} else {
+		err = db.QueryRow(`SELECT id FROM promotions WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`, req.PromotionID, orgID).Scan(&promoID)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "promotion_not_found"})
 		return
@@ -515,6 +674,16 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func getPromotionReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
+	branchID, orgID := tenantContext(r)
+	branchID, orgID, err := ensureOrgFromBranch(db, branchID, orgID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_branch"})
+		return
+	}
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_tenant_context"})
+		return
+	}
 
 	if from == "" {
 		from = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
@@ -540,6 +709,13 @@ func getPromotionReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	`
 
 	args := []interface{}{from, to}
+	if branchID != "" {
+		query += " AND (p.branch_id = $3 OR (p.branch_id IS NULL AND p.organization_id = $4))"
+		args = append(args, branchID, orgID)
+	} else {
+		query += " AND (p.organization_id = $3 OR p.organization_id IS NULL)"
+		args = append(args, orgID)
+	}
 
 	query += " GROUP BY p.id ORDER BY usage_count DESC, total_discount DESC"
 

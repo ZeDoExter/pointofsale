@@ -11,8 +11,16 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
+  const organizationId = localStorage.getItem('organization_id');
+  const branchId = localStorage.getItem('branch_id');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  if (organizationId) {
+    config.headers['X-Organization-ID'] = organizationId;
+  }
+  if (branchId) {
+    config.headers['X-Branch-ID'] = branchId;
   }
   return config;
 });

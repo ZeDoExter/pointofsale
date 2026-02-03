@@ -88,6 +88,87 @@ type HourlySales struct {
 	TotalRevenue float64 `json:"total_revenue"`
 }
 
+// tenantContext extracts org/branch/user context from gateway headers.
+func tenantContext(r *http.Request) (branchID, orgID, userID string) {
+	branchID = r.Header.Get("X-Branch-ID")
+	orgID = r.Header.Get("X-Organization-ID")
+	userID = r.Header.Get("X-User-ID")
+	return
+}
+
+// nullable wraps empty strings as NULL for SQL parameters.
+func nullable(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// resolveContext fills missing branch/org using table metadata when possible.
+func resolveContext(db *sql.DB, branchID, orgID string, tableID *int) (string, string, error) {
+	if branchID == "" && tableID != nil {
+		var tblBranch, tblOrg sql.NullString
+		err := db.QueryRow(`
+			SELECT t.branch_id, b.organization_id
+			FROM tables t
+			JOIN branches b ON t.branch_id = b.id
+			WHERE t.id = $1
+		`, *tableID).Scan(&tblBranch, &tblOrg)
+		if err == sql.ErrNoRows {
+			return "", "", fmt.Errorf("table_not_found")
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if tblBranch.Valid {
+			branchID = tblBranch.String
+		}
+		if tblOrg.Valid {
+			orgID = tblOrg.String
+		}
+	}
+
+	if orgID == "" && branchID != "" {
+		var bOrg sql.NullString
+		err := db.QueryRow(`SELECT organization_id FROM branches WHERE id = $1`, branchID).Scan(&bOrg)
+		if err == sql.ErrNoRows {
+			return branchID, "", fmt.Errorf("branch_not_found")
+		}
+		if err != nil {
+			return branchID, "", err
+		}
+		if bOrg.Valid {
+			orgID = bOrg.String
+		}
+	}
+
+	return branchID, orgID, nil
+}
+
+// guardOrderScope ensures the order belongs to the current tenant context.
+func guardOrderScope(db *sql.DB, orderID, branchID, orgID string) error {
+	if branchID == "" && orgID == "" {
+		return nil
+	}
+
+	query := "SELECT 1 FROM orders WHERE id = $1"
+	args := []interface{}{orderID}
+
+	if branchID != "" {
+		query += " AND branch_id = $2"
+		args = append(args, branchID)
+	} else if orgID != "" {
+		query += " AND organization_id = $2"
+		args = append(args, orgID)
+	}
+
+	var ok int
+	if err := db.QueryRow(query, args...).Scan(&ok); err != nil {
+		return err
+	}
+	return nil
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -190,12 +271,9 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No branch/org scope in current schema
-
-	// If no created_by provided (guest order), use NULL
-	var createdBy *string
-	if req.CreatedBy != "" {
-		createdBy = &req.CreatedBy
+	branchID, orgID, userID := tenantContext(r)
+	if req.CreatedBy == "" && userID != "" {
+		req.CreatedBy = userID
 	}
 
 	var tableID *int
@@ -207,8 +285,25 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	branchID, orgID, err := resolveContext(db, branchID, orgID, tableID)
+	if err != nil {
+		if err.Error() == "table_not_found" || err.Error() == "branch_not_found" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		log.Printf("Failed to resolve context: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
 	var orderNumber int
-	err := db.QueryRow("SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders").Scan(&orderNumber)
+	if branchID != "" {
+		err = db.QueryRow("SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE branch_id = $1", branchID).Scan(&orderNumber)
+	} else if orgID != "" {
+		err = db.QueryRow("SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE organization_id = $1", orgID).Scan(&orderNumber)
+	} else {
+		err = db.QueryRow("SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders").Scan(&orderNumber)
+	}
 	if err != nil {
 		log.Printf("Failed to get order number: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
@@ -231,9 +326,9 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(`
-		INSERT INTO orders (id, table_id, order_number, status, subtotal, tax, total_amount, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, 'OPEN', $4, $5, $6, $7, NOW(), NOW())
-	`, orderID, tableID, orderNumber, subtotal, tax, subtotal+tax, createdBy)
+		INSERT INTO orders (id, organization_id, branch_id, table_id, order_number, status, subtotal, tax, total_amount, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, 'OPEN', $6, $7, $8, $9, NOW(), NOW())
+	`, orderID, nullable(orgID), nullable(branchID), tableID, orderNumber, subtotal, tax, subtotal+tax, nullable(req.CreatedBy))
 
 	if err != nil {
 		log.Printf("Failed to create order: %v", err)
@@ -247,7 +342,7 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		_, err := tx.Exec(`
 			INSERT INTO order_items (id, order_id, menu_item_id, menu_item_name, quantity, unit_price, item_total, item_status, added_by, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, NOW())
-		`, itemID, orderID, uuid.New().String(), item.ItemName, item.Quantity, item.Price, itemTotal, createdBy)
+		`, itemID, orderID, uuid.New().String(), item.ItemName, item.Quantity, item.Price, itemTotal, nullable(req.CreatedBy))
 		if err != nil {
 			log.Printf("Failed to create order item: %v", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
@@ -267,7 +362,7 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		"order_number": orderNumber,
 		"status":       "OPEN",
 		"total_amount": subtotal + tax,
-	}, "", "")
+	}, branchID, orgID)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"order_id":     orderID,
@@ -279,13 +374,24 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 func getOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	branchID, orgID, _ := tenantContext(r)
 
-	var order Order
-	err := db.QueryRow(`
+	query := `
 		SELECT id, table_id, order_number, status, subtotal, tax, discount_amount, 
 		       total_amount, created_by, created_at, updated_at
-		FROM orders WHERE id = $1
-	`, id).Scan(
+		FROM orders WHERE id = $1`
+	args := []interface{}{id}
+
+	if branchID != "" {
+		query += " AND branch_id = $2"
+		args = append(args, branchID)
+	} else if orgID != "" {
+		query += " AND organization_id = $2"
+		args = append(args, orgID)
+	}
+
+	var order Order
+	err := db.QueryRow(query, args...).Scan(
 		&order.ID, &order.TableID, &order.OrderNumber, &order.Status,
 		&order.Subtotal, &order.Tax, &order.DiscountAmount, &order.TotalAmount,
 		&order.CreatedBy, &order.CreatedAt, &order.UpdatedAt,
@@ -330,6 +436,16 @@ func getOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 func addOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	orderID := mux.Vars(r)["id"]
+	branchID, orgID, userID := tenantContext(r)
+	if err := guardOrderScope(db, orderID, branchID, orgID); err != nil {
+		if err == sql.ErrNoRows {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "order_not_found"})
+			return
+		}
+		log.Printf("Scope check failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
 
 	var req AddItemRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -338,7 +454,11 @@ func addOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.AddedBy == "" {
-		req.AddedBy = uuid.New().String()
+		if userID != "" {
+			req.AddedBy = userID
+		} else {
+			req.AddedBy = uuid.New().String()
+		}
 	}
 
 	itemTotal := float64(req.Quantity) * req.UnitPrice
@@ -394,6 +514,7 @@ func addOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 func listOrders(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	tableID := r.URL.Query().Get("table_id")
+	branchID, orgID, _ := tenantContext(r)
 
 	query := `SELECT id, table_id, order_number, status, subtotal, tax, discount_amount, 
 	       total_amount, created_by, created_at, updated_at FROM orders WHERE 1=1`
@@ -406,6 +527,13 @@ func listOrders(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	if tableID != "" {
 		query += ` AND table_id = $` + fmt.Sprintf("%d", len(args)+1)
 		args = append(args, tableID)
+	}
+	if branchID != "" {
+		query += ` AND branch_id = $` + fmt.Sprintf("%d", len(args)+1)
+		args = append(args, branchID)
+	} else if orgID != "" {
+		query += ` AND organization_id = $` + fmt.Sprintf("%d", len(args)+1)
+		args = append(args, orgID)
 	}
 
 	query += ` ORDER BY created_at DESC LIMIT 100`
@@ -434,6 +562,16 @@ func removeOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	orderID := vars["id"]
 	itemID := vars["itemId"]
+	branchID, orgID, _ := tenantContext(r)
+	if err := guardOrderScope(db, orderID, branchID, orgID); err != nil {
+		if err == sql.ErrNoRows {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "order_not_found"})
+			return
+		}
+		log.Printf("Scope check failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
 
 	var itemTotal float64
 	err := db.QueryRow(`
@@ -491,6 +629,16 @@ func removeOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 func updateOrderStatus(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	orderID := mux.Vars(r)["id"]
+	branchID, orgID, _ := tenantContext(r)
+	if err := guardOrderScope(db, orderID, branchID, orgID); err != nil {
+		if err == sql.ErrNoRows {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "order_not_found"})
+			return
+		}
+		log.Printf("Scope check failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
 
 	var req struct {
 		Status string `json:"status"`
@@ -514,7 +662,7 @@ func updateOrderStatus(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	publishEvent("order_status_updated", map[string]interface{}{
 		"order_id": orderID,
 		"status":   req.Status,
-	}, "", "")
+	}, branchID, orgID)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": req.Status})
 }
@@ -529,6 +677,7 @@ func getSalesReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	// Parse query params
 	from := r.URL.Query().Get("from") // YYYY-MM-DD
 	to := r.URL.Query().Get("to")     // YYYY-MM-DD
+	branchID, orgID, _ := tenantContext(r)
 
 	if from == "" {
 		from = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
@@ -551,6 +700,13 @@ func getSalesReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	`
 
 	args := []interface{}{from, to}
+	if branchID != "" {
+		query += " AND branch_id = $3"
+		args = append(args, branchID)
+	} else if orgID != "" {
+		query += " AND organization_id = $3"
+		args = append(args, orgID)
+	}
 
 	query += " GROUP BY DATE(created_at) ORDER BY date DESC"
 
@@ -580,6 +736,7 @@ func getTopItems(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
 	limitStr := r.URL.Query().Get("limit")
+	branchID, orgID, _ := tenantContext(r)
 
 	if from == "" {
 		from = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
@@ -604,8 +761,19 @@ func getTopItems(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	`
 
 	args := []interface{}{from, to}
+	argPos := 3
 
-	query += " GROUP BY oi.menu_item_name ORDER BY quantity_sold DESC LIMIT $3"
+	if branchID != "" {
+		query += fmt.Sprintf(" AND o.branch_id = $%d", argPos)
+		args = append(args, branchID)
+		argPos++
+	} else if orgID != "" {
+		query += fmt.Sprintf(" AND o.organization_id = $%d", argPos)
+		args = append(args, orgID)
+		argPos++
+	}
+
+	query += fmt.Sprintf(" GROUP BY oi.menu_item_name ORDER BY quantity_sold DESC LIMIT $%d", argPos)
 	args = append(args, limit)
 
 	rows, err := db.Query(query, args...)
@@ -635,6 +803,7 @@ func getHourlySales(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	if date == "" {
 		date = time.Now().Format("2006-01-02")
 	}
+	branchID, orgID, _ := tenantContext(r)
 
 	query := `
 		SELECT 
@@ -647,6 +816,17 @@ func getHourlySales(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	`
 
 	args := []interface{}{date}
+	argPos := 2
+
+	if branchID != "" {
+		query += fmt.Sprintf(" AND branch_id = $%d", argPos)
+		args = append(args, branchID)
+		argPos++
+	} else if orgID != "" {
+		query += fmt.Sprintf(" AND organization_id = $%d", argPos)
+		args = append(args, orgID)
+		argPos++
+	}
 
 	query += " GROUP BY hour ORDER BY hour"
 

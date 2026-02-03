@@ -1,44 +1,107 @@
-import { useState, useEffect } from 'react';
-import { Routes, Route, Link, useNavigate } from 'react-router-dom';
-import OrderList from '../components/admin/OrderList';
-import CreateOrder from '../components/admin/CreateOrder';
-import OrderDetail from '../components/admin/OrderDetail';
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../services/api';
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
-  const [stats, setStats] = useState({ orders: 0, revenue: 0, active: 0 });
+  const [organizations, setOrganizations] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [selectedOrg, setSelectedOrg] = useState('');
+  const [orgForm, setOrgForm] = useState({ name: '', slug: '', contact_email: '', contact_phone: '' });
+  const [branchForm, setBranchForm] = useState({ name: '', slug: '', city: '', phone: '', email: '' });
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) {
       navigate('/admin/login');
-    } else {
-      const name = localStorage.getItem('name');
-      const role = localStorage.getItem('role');
-      const orgName = localStorage.getItem('organization_name');
-
-      setUser({ role, name, orgName });
-      fetchStats();
+      return;
     }
+
+    const name = localStorage.getItem('name');
+    const role = (localStorage.getItem('role') || 'ADMIN').toUpperCase();
+    const orgName = localStorage.getItem('organization_name');
+    setUser({ role, name, orgName });
+
+    loadOrganizations();
   }, [navigate]);
 
-  const fetchStats = async () => {
+  const loadOrganizations = async () => {
+    setLoading(true);
+    setMessage('');
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8080/api/orders', {
-        headers: { 'Authorization': `Bearer ${token}` },
+      const { data } = await api.get('/api/organizations');
+      const orgs = Array.isArray(data?.organizations) ? data.organizations : [];
+      setOrganizations(orgs);
+
+      if (orgs.length > 0) {
+        const current = localStorage.getItem('organization_id') || orgs[0].id;
+        setSelectedOrg(current);
+        fetchBranches(current);
+      } else {
+        setBranches([]);
+      }
+    } catch (err) {
+      console.error('Failed to load organizations:', err);
+      setMessage('Failed to load organizations');
+    }
+    setLoading(false);
+  };
+
+  const fetchBranches = async (orgId) => {
+    if (!orgId) return;
+    setLoading(true);
+    setMessage('');
+    try {
+      const { data } = await api.get(`/api/organizations/${orgId}/branches`);
+      const list = Array.isArray(data?.branches) ? data.branches : [];
+      setBranches(list);
+    } catch (err) {
+      console.error('Failed to load branches:', err);
+      setMessage('Failed to load branches');
+    }
+    setLoading(false);
+  };
+
+  const handleOrgSubmit = async (e) => {
+    e.preventDefault();
+    setMessage('');
+    try {
+      await api.post('/api/organizations', {
+        name: orgForm.name,
+        slug: orgForm.slug,
+        contact_email: orgForm.contact_email,
+        contact_phone: orgForm.contact_phone,
       });
-      const data = await response.json();
-      const orders = Array.isArray(data) ? data : (data.orders || []);
-			
-      setStats({
-        orders: orders.length,
-        revenue: orders.filter(o => o.status === 'PAID').reduce((sum, o) => sum + o.total_amount, 0),
-        active: orders.filter(o => o.status === 'OPEN' || o.status === 'CONFIRMED').length
+      setOrgForm({ name: '', slug: '', contact_email: '', contact_phone: '' });
+      await loadOrganizations();
+      setMessage('Organization created');
+    } catch (err) {
+      console.error('Failed to create organization:', err);
+      setMessage('Failed to create organization');
+    }
+  };
+
+  const handleBranchSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedOrg) return;
+    setMessage('');
+    try {
+      await api.post(`/api/organizations/${selectedOrg}/branches`, {
+        name: branchForm.name,
+        slug: branchForm.slug,
+        city: branchForm.city,
+        phone: branchForm.phone,
+        email: branchForm.email,
       });
-    } catch (error) {
-      console.error('Failed to fetch stats:', error);
+      setBranchForm({ name: '', slug: '', city: '', phone: '', email: '' });
+      await fetchBranches(selectedOrg);
+      setMessage('Branch created');
+    } catch (err) {
+      console.error('Failed to create branch:', err);
+      setMessage('Failed to create branch');
     }
   };
 
@@ -53,6 +116,8 @@ export default function AdminDashboard() {
     localStorage.removeItem('branch_name');
     navigate('/admin/login');
   };
+
+  const branchCount = useMemo(() => branches.length, [branches]);
 
   if (!user) return <div>Loading...</div>;
 
@@ -76,7 +141,7 @@ export default function AdminDashboard() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <span style={{
             padding: '8px 16px',
-            backgroundColor: user.role === 'ADMIN' ? '#10b981' : '#3b82f6',
+            backgroundColor: '#10b981',
             color: 'white',
             borderRadius: '6px',
             fontWeight: 'bold'
@@ -114,91 +179,178 @@ export default function AdminDashboard() {
         </div>
       </header>
 
-      {/* Stats Cards */}
       <div style={{ padding: '30px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+        {message && (
           <div style={{
-            backgroundColor: 'white',
-            padding: '24px',
-            borderRadius: '12px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            borderLeft: '6px solid #3b82f6'
+            marginBottom: '16px',
+            padding: '12px 16px',
+            backgroundColor: '#ecfeff',
+            color: '#0ea5e9',
+            borderRadius: '8px',
+            border: '1px solid #bae6fd'
           }}>
-            <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Total Orders</div>
-            <div style={{ fontSize: '32px', fontWeight: 'bold', color: '#1f2937' }}>
-              {stats.orders}
-            </div>
+            {message}
           </div>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '24px',
-            borderRadius: '12px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            borderLeft: '6px solid #10b981'
-          }}>
-            <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Total Revenue</div>
-            <div style={{ fontSize: '32px', fontWeight: 'bold', color: '#10b981' }}>
-              ฿{stats.revenue.toFixed(2)}
-            </div>
+        )}
+
+        {/* Stats Cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', borderLeft: '5px solid #3b82f6' }}>
+            <div style={{ color: '#6b7280', marginBottom: '6px' }}>Organizations</div>
+            <div style={{ fontSize: '30px', fontWeight: 'bold' }}>{organizations.length}</div>
           </div>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '24px',
-            borderRadius: '12px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            borderLeft: '6px solid #fbbf24'
-          }}>
-            <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Active Orders</div>
-            <div style={{ fontSize: '32px', fontWeight: 'bold', color: '#fbbf24' }}>
-              {stats.active}
-            </div>
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', borderLeft: '5px solid #10b981' }}>
+            <div style={{ color: '#6b7280', marginBottom: '6px' }}>Branches</div>
+            <div style={{ fontSize: '30px', fontWeight: 'bold' }}>{branchCount}</div>
           </div>
         </div>
 
-        {/* Navigation */}
-        <nav style={{
-          backgroundColor: 'white',
-          padding: '15px 20px',
-          borderRadius: '12px',
-          marginBottom: '20px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          display: 'flex',
-          gap: '15px'
-        }}>
-          <Link
-            to="/admin"
-            style={{
-              padding: '10px 20px',
-              textDecoration: 'none',
-              color: '#3b82f6',
-              fontWeight: 'bold',
-              borderRadius: '6px',
-              backgroundColor: '#eff6ff'
-            }}
-          >
-            📋 Orders
-          </Link>
-          <Link
-            to="/admin/create"
-            style={{
-              padding: '10px 20px',
-              textDecoration: 'none',
-              color: '#10b981',
-              fontWeight: 'bold',
-              borderRadius: '6px',
-              backgroundColor: '#d1fae5'
-            }}
-          >
-            ➕ New Order
-          </Link>
-        </nav>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
+          {/* Organizations */}
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>Organizations</h2>
+              <button
+                onClick={loadOrganizations}
+                style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #e5e7eb', background: '#f9fafb', cursor: 'pointer' }}
+              >
+                Refresh
+              </button>
+            </div>
 
-        {/* Routes */}
-        <Routes>
-          <Route index element={<OrderList />} />
-          <Route path="create" element={<CreateOrder />} />
-          <Route path="order/:orderId" element={<OrderDetail />} />
-        </Routes>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+              {organizations.map((org) => (
+                <button
+                  key={org.id}
+                  onClick={() => {
+                    setSelectedOrg(org.id);
+                    fetchBranches(org.id);
+                  }}
+                  style={{
+                    textAlign: 'left',
+                    padding: '12px',
+                    borderRadius: '10px',
+                    border: org.id === selectedOrg ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                    backgroundColor: org.id === selectedOrg ? '#eff6ff' : '#ffffff',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{ fontWeight: 'bold' }}>{org.name}</div>
+                  <div style={{ color: '#6b7280', fontSize: '12px' }}>Slug: {org.slug}</div>
+                  <div style={{ color: '#6b7280', fontSize: '12px' }}>Plan: {org.plan_type || 'FREE'}</div>
+                </button>
+              ))}
+              {organizations.length === 0 && (
+                <p style={{ color: '#6b7280' }}>No organizations yet.</p>
+              )}
+            </div>
+
+            <form onSubmit={handleOrgSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Create Organization</h3>
+              <input
+                required
+                placeholder="Name"
+                value={orgForm.name}
+                onChange={(e) => setOrgForm({ ...orgForm, name: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <input
+                required
+                placeholder="Slug"
+                value={orgForm.slug}
+                onChange={(e) => setOrgForm({ ...orgForm, slug: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <input
+                placeholder="Contact Email"
+                value={orgForm.contact_email}
+                onChange={(e) => setOrgForm({ ...orgForm, contact_email: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <input
+                placeholder="Contact Phone"
+                value={orgForm.contact_phone}
+                onChange={(e) => setOrgForm({ ...orgForm, contact_phone: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                style={{ padding: '10px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+              >
+                {loading ? 'Saving...' : 'Create Organization'}
+              </button>
+            </form>
+          </div>
+
+          {/* Branches */}
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>Branches</h2>
+              {selectedOrg && (
+                <span style={{ color: '#6b7280', fontSize: '13px' }}>Org: {selectedOrg}</span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+              {branches.map((branch) => (
+                <div key={branch.id} style={{ padding: '12px', borderRadius: '10px', border: '1px solid #e5e7eb', background: '#f9fafb' }}>
+                  <div style={{ fontWeight: 'bold' }}>{branch.name}</div>
+                  <div style={{ color: '#6b7280', fontSize: '12px' }}>Slug: {branch.slug}</div>
+                  <div style={{ color: '#6b7280', fontSize: '12px' }}>
+                    {branch.city || 'City N/A'} • {branch.phone || 'Phone N/A'}
+                  </div>
+                </div>
+              ))}
+              {branches.length === 0 && (
+                <p style={{ color: '#6b7280' }}>No branches for this organization.</p>
+              )}
+            </div>
+
+            <form onSubmit={handleBranchSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Create Branch</h3>
+              <input
+                required
+                placeholder="Name"
+                value={branchForm.name}
+                onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <input
+                required
+                placeholder="Slug"
+                value={branchForm.slug}
+                onChange={(e) => setBranchForm({ ...branchForm, slug: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <input
+                placeholder="City"
+                value={branchForm.city}
+                onChange={(e) => setBranchForm({ ...branchForm, city: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <input
+                placeholder="Phone"
+                value={branchForm.phone}
+                onChange={(e) => setBranchForm({ ...branchForm, phone: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <input
+                placeholder="Email"
+                value={branchForm.email}
+                onChange={(e) => setBranchForm({ ...branchForm, email: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+              />
+              <button
+                type="submit"
+                disabled={!selectedOrg || loading}
+                style={{ padding: '10px', backgroundColor: selectedOrg ? '#10b981' : '#9ca3af', color: 'white', border: 'none', borderRadius: '8px', cursor: selectedOrg ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}
+              >
+                {loading ? 'Saving...' : 'Create Branch'}
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   );

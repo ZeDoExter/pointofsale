@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../App.css';
+import api from '../services/api';
 
 const ManagerDashboard = () => {
   const navigate = useNavigate();
@@ -29,12 +30,9 @@ const ManagerDashboard = () => {
   const fetchOrders = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8080/api/orders', {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      const data = await response.json();
-      setOrders(data || []);
+      const { data } = await api.get('/api/orders');
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.orders) ? data.orders : []);
+      setOrders(list);
     } catch (error) {
       console.error('Failed to fetch orders:', error);
     }
@@ -44,12 +42,9 @@ const ManagerDashboard = () => {
   const fetchSalesReport = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8080/api/reports/sales?from=2024-01-01&to=2026-12-31', {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      const data = await response.json();
-      setSalesReport(data || []);
+      const { data } = await api.get('/api/reports/sales', { params: { from: '2024-01-01', to: '2026-12-31' } });
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.sales) ? data.sales : []);
+      setSalesReport(list);
     } catch (error) {
       console.error('Failed to fetch sales report:', error);
     }
@@ -58,12 +53,9 @@ const ManagerDashboard = () => {
 
   const fetchTopItems = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8080/api/reports/top-items?limit=10', {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      const data = await response.json();
-      setTopItems(data || []);
+      const { data } = await api.get('/api/reports/top-items', { params: { limit: 10 } });
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+      setTopItems(list);
     } catch (error) {
       console.error('Failed to fetch top items:', error);
     }
@@ -72,12 +64,9 @@ const ManagerDashboard = () => {
   const fetchPromotionReport = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8080/api/reports/promotions', {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      const data = await response.json();
-      setPromotionReport(data || []);
+      const { data } = await api.get('/api/reports/promotions');
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.promotions) ? data.promotions : []);
+      setPromotionReport(list);
     } catch (error) {
       console.error('Failed to fetch promotion report:', error);
     }
@@ -89,8 +78,8 @@ const ManagerDashboard = () => {
     navigate('/');
   };
 
-  const totalRevenue = salesReport.reduce((sum, day) => sum + day.total_revenue, 0);
-  const totalOrders = salesReport.reduce((sum, day) => sum + day.order_count, 0);
+  const totalRevenue = salesReport.reduce((sum, day) => sum + Number(day.total_revenue || 0), 0);
+  const totalOrders = salesReport.reduce((sum, day) => sum + Number(day.order_count || 0), 0);
   const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
   return (
@@ -253,10 +242,10 @@ const ManagerDashboard = () => {
                             </span>
                           </td>
                           <td style={{ padding: '12px', fontWeight: 'bold' }}>
-                            ฿{order.total_amount.toFixed(2)}
+                            ฿{Number(order.total_amount || 0).toFixed(2)}
                           </td>
                           <td style={{ padding: '12px', color: '#6b7280' }}>
-                            {new Date(order.created_at).toLocaleDateString()}
+                            {order.created_at ? new Date(order.created_at).toLocaleDateString() : '-'}
                           </td>
                         </tr>
                       ))}
@@ -336,13 +325,13 @@ const ManagerDashboard = () => {
                           <td style={{ padding: '12px' }}>{day.date}</td>
                           <td style={{ padding: '12px', textAlign: 'right' }}>{day.order_count}</td>
                           <td style={{ padding: '12px', textAlign: 'right', fontWeight: 'bold', color: '#10b981' }}>
-                            ฿{day.total_revenue.toFixed(2)}
+                            ฿{Number(day.total_revenue || 0).toFixed(2)}
                           </td>
                           <td style={{ padding: '12px', textAlign: 'right', color: '#ef4444' }}>
-                            -฿{day.total_discount.toFixed(2)}
+                            -฿{Number(day.total_discount || 0).toFixed(2)}
                           </td>
                           <td style={{ padding: '12px', textAlign: 'right' }}>
-                            ฿{day.total_tax.toFixed(2)}
+                            ฿{Number(day.total_tax || 0).toFixed(2)}
                           </td>
                         </tr>
                       ))}
@@ -389,10 +378,10 @@ const ManagerDashboard = () => {
                         </div>
                         <div style={{ textAlign: 'right' }}>
                           <div style={{ fontWeight: 'bold', color: '#10b981' }}>
-                            ฿{item.total_revenue.toFixed(2)}
+                            ฿{Number(item.total_revenue || 0).toFixed(2)}
                           </div>
                           <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                            {item.quantity_sold} sold
+                            {item.quantity_sold || 0} sold
                           </div>
                         </div>
                       </div>
@@ -431,7 +420,7 @@ const ManagerDashboard = () => {
                           </td>
                           <td style={{ padding: '12px', textAlign: 'right' }}>{promo.usage_count}</td>
                           <td style={{ padding: '12px', textAlign: 'right', fontWeight: 'bold', color: '#ef4444' }}>
-                            -฿{promo.total_discount.toFixed(2)}
+                            -฿{Number(promo.total_discount || 0).toFixed(2)}
                           </td>
                           <td style={{ padding: '12px', textAlign: 'center' }}>
                             <span style={{

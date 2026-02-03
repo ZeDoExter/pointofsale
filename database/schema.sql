@@ -13,36 +13,51 @@
 -- TABLES SCHEMA
 -- ============================================================================
 
--- 0. ORGANIZATIONS (Tenants)
 CREATE TABLE organizations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) NOT NULL UNIQUE,
+  contact_email VARCHAR(255),
+  contact_phone VARCHAR(50),
+  plan_type VARCHAR(50) NOT NULL DEFAULT 'FREE',
+  is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- 0.1 BRANCHES (Physical locations)
 CREATE TABLE branches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) NOT NULL,
+  address TEXT,
+  city VARCHAR(100),
+  province VARCHAR(100),
+  postal_code VARCHAR(20),
+  phone VARCHAR(50),
+  email VARCHAR(255),
+  opening_time VARCHAR(20),
+  closing_time VARCHAR(20),
+  is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT uq_branch_slug UNIQUE (organization_id, slug)
 );
 
 CREATE INDEX idx_branches_org ON branches(organization_id);
 
--- 1. USERS (Staff login)
 -- Staff accounts for POS
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  username VARCHAR(50) NOT NULL,
+  username VARCHAR(50) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   role VARCHAR(20) NOT NULL, -- 'cashier', 'manager', 'admin'
   name VARCHAR(100) NOT NULL,
   organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
   branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
   is_active BOOLEAN NOT NULL DEFAULT true,
+  last_login_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 

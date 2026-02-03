@@ -125,11 +125,15 @@ func main() {
 		// Query user
 		var userID, passwordHash, role, fullName string
 		var isActive bool
+		var orgID, branchID, orgName, branchName sql.NullString
 		err := db.QueryRow(`
-			SELECT u.id, u.password_hash, u.role, u.name, u.is_active
+			SELECT u.id, u.password_hash, u.role, u.name, u.is_active,
+			       u.organization_id, u.branch_id, o.name AS org_name, b.name AS branch_name
 			FROM users u
+			LEFT JOIN organizations o ON u.organization_id = o.id
+			LEFT JOIN branches b ON u.branch_id = b.id
 			WHERE u.username = $1
-		`, req.Username).Scan(&userID, &passwordHash, &role, &fullName, &isActive)
+		`, req.Username).Scan(&userID, &passwordHash, &role, &fullName, &isActive, &orgID, &branchID, &orgName, &branchName)
 
 		if err == sql.ErrNoRows {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_credentials"})
@@ -152,7 +156,7 @@ func main() {
 		// TODO: Add password verification (bcrypt)
 		// For now, accepting any password for development
 
-		// Build JWT claims
+		// Build JWT claims with tenant context
 		claims := jwt.MapClaims{
 			"sub":      userID,
 			"username": req.Username,
@@ -160,6 +164,13 @@ func main() {
 			"name":     fullName,
 			"iat":      time.Now().Unix(),
 			"exp":      time.Now().Add(8 * time.Hour).Unix(),
+		}
+
+		if orgID.Valid {
+			claims["organization_id"] = orgID.String
+		}
+		if branchID.Valid {
+			claims["branch_id"] = branchID.String
 		}
 
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -171,10 +182,15 @@ func main() {
 
 		// Prepare response
 		response := map[string]any{
-			"access_token": signed,
-			"role":         role,
-			"username":     req.Username,
-			"name":         fullName,
+			"access_token":      signed,
+			"role":              role,
+			"username":          req.Username,
+			"name":              fullName,
+			"organization_id":   orgID.String,
+			"organization_name": orgName.String,
+			"branch_id":         branchID.String,
+			"branch_name":       branchName.String,
+			"user_id":           userID,
 		}
 
 		writeJSON(w, http.StatusOK, response)
@@ -201,9 +217,11 @@ func main() {
 
 		claims, _ := parsed.Claims.(jwt.MapClaims)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"valid": true,
-			"sub":   claims["sub"],
-			"role":  claims["role"],
+			"valid":           true,
+			"sub":             claims["sub"],
+			"role":            claims["role"],
+			"organization_id": claims["organization_id"],
+			"branch_id":       claims["branch_id"],
 		})
 	}).Methods(http.MethodPost)
 
@@ -282,12 +300,15 @@ func main() {
 
 		// Get fresh user data from database
 		var fullName, role, username string
+		var orgID, branchID, orgName, branchName sql.NullString
 
 		err = db.QueryRow(`
-			SELECT u.username, u.name, u.role
+			SELECT u.username, u.name, u.role, u.organization_id, u.branch_id, o.name AS org_name, b.name AS branch_name
 			FROM users u
+			LEFT JOIN organizations o ON u.organization_id = o.id
+			LEFT JOIN branches b ON u.branch_id = b.id
 			WHERE u.id = $1 AND u.is_active = true
-		`, userID).Scan(&username, &fullName, &role)
+		`, userID).Scan(&username, &fullName, &role, &orgID, &branchID, &orgName, &branchName)
 
 		if err != nil {
 			log.Printf("Failed to get user: %v", err)
@@ -296,10 +317,14 @@ func main() {
 		}
 
 		response := map[string]any{
-			"id":       userID,
-			"username": username,
-			"name":     fullName,
-			"role":     role,
+			"id":                userID,
+			"username":          username,
+			"name":              fullName,
+			"role":              role,
+			"organization_id":   orgID.String,
+			"organization_name": orgName.String,
+			"branch_id":         branchID.String,
+			"branch_name":       branchName.String,
 		}
 
 		writeJSON(w, http.StatusOK, response)
