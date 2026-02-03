@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../App.css';
+import { orderAPI } from '../services/api';
 
 const CashierDashboard = () => {
   const navigate = useNavigate();
@@ -20,14 +21,9 @@ const CashierDashboard = () => {
 
   const fetchOrders = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8080/api/orders', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      const data = await response.json();
-      setOrders(data || []);
+      const { data } = await orderAPI.list();
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.orders) ? data.orders : []);
+      setOrders(list);
     } catch (error) {
       console.error('Failed to fetch orders:', error);
     }
@@ -35,33 +31,30 @@ const CashierDashboard = () => {
 
   const createOrder = async () => {
     try {
-      const token = localStorage.getItem('token');
       const userId = localStorage.getItem('user_id');
-      
-      const orderData = {
-        table_id: newOrder.table_id || '',
-        items: newOrder.items.filter(item => item.item_name && item.price),
-        created_by: userId
-      };
+      const items = newOrder.items
+        .filter(item => item.item_name && !Number.isNaN(Number(item.price)))
+        .map(item => ({
+          item_name: item.item_name,
+          price: Number(item.price),
+          quantity: Number(item.quantity) || 1,
+        }));
 
-      const response = await fetch('http://localhost:8080/api/orders', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(orderData),
+      if (items.length === 0) {
+        alert('Please add at least one item');
+        return;
+      }
+
+      await orderAPI.create({
+        table_id: newOrder.table_id || '',
+        items,
+        created_by: userId,
       });
 
-      if (response.ok) {
-        alert('Order created successfully!');
-        setShowCreateOrder(false);
-        setNewOrder({ table_id: '', items: [{ item_name: '', price: '', quantity: 1 }] });
-        fetchOrders();
-      } else {
-        const error = await response.json();
-        alert('Failed to create order: ' + (error.error || 'Unknown error'));
-      }
+      alert('Order created successfully!');
+      setShowCreateOrder(false);
+      setNewOrder({ table_id: '', items: [{ item_name: '', price: '', quantity: 1 }] });
+      fetchOrders();
     } catch (error) {
       console.error('Failed to create order:', error);
       alert('Failed to create order');
@@ -70,20 +63,9 @@ const CashierDashboard = () => {
 
   const updateOrderStatus = async (orderId, status) => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:8080/api/orders/${orderId}/status`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ status }),
-      });
-
-      if (response.ok) {
-        alert('Order status updated!');
-        fetchOrders();
-      }
+      await orderAPI.updateStatus(orderId, status);
+      alert('Order status updated!');
+      fetchOrders();
     } catch (error) {
       console.error('Failed to update order:', error);
     }
@@ -98,7 +80,7 @@ const CashierDashboard = () => {
 
   const updateItem = (index, field, value) => {
     const items = [...newOrder.items];
-    items[index][field] = value;
+    items[index][field] = field === 'quantity' ? Number(value) || 1 : value;
     setNewOrder({ ...newOrder, items });
   };
 
@@ -396,10 +378,10 @@ const CashierDashboard = () => {
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#10b981' }}>
-                        ฿{order.total_amount.toFixed(2)}
+                        ฿{Number(order.total_amount || 0).toFixed(2)}
                       </div>
                       <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
-                        {new Date(order.created_at).toLocaleString()}
+                        {order.created_at ? new Date(order.created_at).toLocaleString() : '-'}
                       </div>
                     </div>
                   </div>

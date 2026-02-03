@@ -16,7 +16,11 @@ export default function UserOrder() {
   const fetchOrder = async () => {
     try {
       const { data } = await orderAPI.get(orderId);
-      setOrder(data);
+      if (data?.order) {
+        setOrder({ ...data.order, items: data.items || [] });
+      } else {
+        setOrder(null);
+      }
     } catch (err) {
       console.error('Failed to fetch order');
     }
@@ -61,9 +65,9 @@ export default function UserOrder() {
         <tbody>
           {order.items?.map((item) => (
             <tr key={item.id} style={{ borderBottom: '1px solid #eee' }}>
-              <td style={{ padding: '10px' }}>{item.item_name}</td>
+              <td style={{ padding: '10px' }}>{item.menu_item_name || item.item_name}</td>
               <td style={{ padding: '10px', textAlign: 'center' }}>x{item.quantity}</td>
-              <td style={{ padding: '10px', textAlign: 'right' }}>฿{item.item_total.toFixed(2)}</td>
+              <td style={{ padding: '10px', textAlign: 'right' }}>฿{Number(item.item_total || 0).toFixed(2)}</td>
             </tr>
           ))}
         </tbody>
@@ -72,21 +76,21 @@ export default function UserOrder() {
       <div style={{ borderTop: '2px solid #333', paddingTop: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
           <span>ราคาสินค้า</span>
-          <span>฿{order.subtotal.toFixed(2)}</span>
+          <span>฿{Number(order.subtotal || 0).toFixed(2)}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
           <span>ภาษี</span>
-          <span>฿{order.tax.toFixed(2)}</span>
+          <span>฿{Number(order.tax || 0).toFixed(2)}</span>
         </div>
-        {order.discount_amount > 0 && (
+        {Number(order.discount_amount || 0) > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px', color: 'green' }}>
             <span>ส่วนลด</span>
-            <span>-฿{order.discount_amount.toFixed(2)}</span>
+            <span>-฿{Number(order.discount_amount).toFixed(2)}</span>
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', fontSize: '24px', fontWeight: 'bold' }}>
           <span>รวมทั้งสิ้น</span>
-          <span>฿{order.total_amount.toFixed(2)}</span>
+          <span>฿{Number(order.total_amount || 0).toFixed(2)}</span>
         </div>
       </div>
 
