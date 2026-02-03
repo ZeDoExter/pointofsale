@@ -22,6 +22,7 @@ var services = map[string]string{
 	"order":     "http://order-service:8083",
 	"promotion": "http://promotion-service:8084",
 	"payment":   "http://payment-service:8085",
+	"org":       "http://org-service:8085",
 }
 
 func main() {
@@ -47,6 +48,9 @@ func main() {
 	if u := os.Getenv("PAYMENT_SERVICE_URL"); u != "" {
 		services["payment"] = u
 	}
+	if u := os.Getenv("ORG_SERVICE_URL"); u != "" {
+		services["org"] = u
+	}
 
 	router := mux.NewRouter()
 
@@ -60,6 +64,7 @@ func main() {
 	router.PathPrefix("/api/orders").Handler(proxyTo(services["order"]))
 	router.PathPrefix("/api/promotions").Handler(proxyTo(services["promotion"]))
 	router.PathPrefix("/api/payments").Handler(proxyTo(services["payment"]))
+	router.PathPrefix("/api/organizations").Handler(proxyTo(services["org"]))
 
 	// CRITICAL: CORS must come first to handle preflight requests
 	handler := corsMiddleware(router)
