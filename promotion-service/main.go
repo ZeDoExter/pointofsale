@@ -29,6 +29,34 @@ type Promotion struct {
 	ValidUntil    *time.Time `json:"valid_until"`
 	MaxUsageCount *int       `json:"max_usage_count"`
 	IsActive      bool       `json:"is_active"`
+	BranchID      *string    `json:"branch_id,omitempty"`
+	CreatedAt     *time.Time `json:"created_at,omitempty"`
+	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+}
+
+type CreatePromotionRequest struct {
+	Code          *string    `json:"code"`
+	Name          string     `json:"name"`
+	DiscountType  string     `json:"discount_type"`
+	DiscountValue float64    `json:"discount_value"`
+	MaxDiscount   *float64   `json:"max_discount"`
+	MinOrderTotal *float64   `json:"min_order_total"`
+	ValidFrom     *time.Time `json:"valid_from"`
+	ValidUntil    *time.Time `json:"valid_until"`
+	MaxUsageCount *int       `json:"max_usage_count"`
+	IsActive      bool       `json:"is_active"`
+}
+
+type UpdatePromotionRequest struct {
+	Name          *string    `json:"name"`
+	DiscountType  *string    `json:"discount_type"`
+	DiscountValue *float64   `json:"discount_value"`
+	MaxDiscount   *float64   `json:"max_discount"`
+	MinOrderTotal *float64   `json:"min_order_total"`
+	ValidFrom     *time.Time `json:"valid_from"`
+	ValidUntil    *time.Time `json:"valid_until"`
+	MaxUsageCount *int       `json:"max_usage_count"`
+	IsActive      *bool      `json:"is_active"`
 }
 
 type EvaluateRequest struct {
@@ -76,6 +104,26 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}).Methods(http.MethodGet)
 
+	router.HandleFunc("/api/promotions", func(w http.ResponseWriter, r *http.Request) {
+		listPromotions(db, w, r)
+	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/promotions", func(w http.ResponseWriter, r *http.Request) {
+		createPromotion(db, w, r)
+	}).Methods(http.MethodPost)
+
+	router.HandleFunc("/api/promotions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		getPromotion(db, w, r)
+	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/promotions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		updatePromotion(db, w, r)
+	}).Methods(http.MethodPut)
+
+	router.HandleFunc("/api/promotions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		deletePromotion(db, w, r)
+	}).Methods(http.MethodDelete)
+
 	router.HandleFunc("/api/promotions/evaluate", func(w http.ResponseWriter, r *http.Request) {
 		evaluatePromotion(db, w, r)
 	}).Methods(http.MethodPost)
@@ -100,6 +148,299 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}
+}
+
+func createPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	role := r.Header.Get("X-User-Role")
+	if role != "ADMIN" && role != "MANAGER" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	branchID := r.Header.Get("X-Branch-ID")
+	if branchID == "" && role == "MANAGER" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+		return
+	}
+
+	var req CreatePromotionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	if req.Name == "" || req.DiscountType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name_and_type_required"})
+		return
+	}
+
+	if req.DiscountType != "FIXED_AMOUNT" && req.DiscountType != "PERCENTAGE" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_discount_type"})
+		return
+	}
+
+	promoID := uuid.New().String()
+	_, err := db.Exec(`
+		INSERT INTO promotions (id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, promoID, req.Code, req.Name, req.DiscountType, req.DiscountValue, req.MaxDiscount, req.MinOrderTotal, req.ValidFrom, req.ValidUntil, req.MaxUsageCount, req.IsActive, branchID)
+
+	if err != nil {
+		log.Printf("Failed to create promotion: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         promoID,
+		"name":       req.Name,
+		"branch_id":  branchID,
+		"is_active":  req.IsActive,
+	})
+}
+
+func listPromotions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID := r.Header.Get("X-Branch-ID")
+	role := r.Header.Get("X-User-Role")
+
+	var rows *sql.Rows
+	var err error
+
+	if role == "ADMIN" {
+		rows, err = db.Query(`
+			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
+			FROM promotions
+			ORDER BY created_at DESC
+		`)
+	} else {
+		if branchID == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+			return
+		}
+		rows, err = db.Query(`
+			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
+			FROM promotions
+			WHERE branch_id = $1
+			ORDER BY created_at DESC
+		`, branchID)
+	}
+
+	if err != nil {
+		log.Printf("Failed to list promotions: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	promotions := []Promotion{}
+	for rows.Next() {
+		var p Promotion
+		err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.BranchID, &p.CreatedAt, &p.UpdatedAt)
+		if err != nil {
+			log.Printf("Failed to scan promotion: %v", err)
+			continue
+		}
+		promotions = append(promotions, p)
+	}
+
+	writeJSON(w, http.StatusOK, promotions)
+}
+
+func getPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	branchID := r.Header.Get("X-Branch-ID")
+	role := r.Header.Get("X-User-Role")
+
+	var p Promotion
+	var err error
+
+	if role == "ADMIN" {
+		err = db.QueryRow(`
+			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
+			FROM promotions
+			WHERE id = $1
+		`, id).Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.BranchID, &p.CreatedAt, &p.UpdatedAt)
+	} else {
+		if branchID == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+			return
+		}
+		err = db.QueryRow(`
+			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
+			FROM promotions
+			WHERE id = $1 AND branch_id = $2
+		`, id, branchID).Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.BranchID, &p.CreatedAt, &p.UpdatedAt)
+	}
+
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "promotion_not_found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to get promotion: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, p)
+}
+
+func updatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	role := r.Header.Get("X-User-Role")
+	if role != "ADMIN" && role != "MANAGER" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	branchID := r.Header.Get("X-Branch-ID")
+	if branchID == "" && role == "MANAGER" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+		return
+	}
+
+	var req UpdatePromotionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	// Check ownership
+	if role == "MANAGER" {
+		var exists string
+		err := db.QueryRow(`SELECT id FROM promotions WHERE id = $1 AND branch_id = $2`, id, branchID).Scan(&exists)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "promotion_not_found"})
+			return
+		}
+	}
+
+	// Build dynamic update query
+	updates := []string{}
+	args := []interface{}{}
+	argPos := 1
+
+	if req.Name != nil {
+		updates = append(updates, fmt.Sprintf("name = $%d", argPos))
+		args = append(args, *req.Name)
+		argPos++
+	}
+	if req.DiscountType != nil {
+		updates = append(updates, fmt.Sprintf("discount_type = $%d", argPos))
+		args = append(args, *req.DiscountType)
+		argPos++
+	}
+	if req.DiscountValue != nil {
+		updates = append(updates, fmt.Sprintf("discount_value = $%d", argPos))
+		args = append(args, *req.DiscountValue)
+		argPos++
+	}
+	if req.MaxDiscount != nil {
+		updates = append(updates, fmt.Sprintf("max_discount = $%d", argPos))
+		args = append(args, req.MaxDiscount)
+		argPos++
+	}
+	if req.MinOrderTotal != nil {
+		updates = append(updates, fmt.Sprintf("min_order_total = $%d", argPos))
+		args = append(args, req.MinOrderTotal)
+		argPos++
+	}
+	if req.ValidFrom != nil {
+		updates = append(updates, fmt.Sprintf("valid_from = $%d", argPos))
+		args = append(args, req.ValidFrom)
+		argPos++
+	}
+	if req.ValidUntil != nil {
+		updates = append(updates, fmt.Sprintf("valid_until = $%d", argPos))
+		args = append(args, req.ValidUntil)
+		argPos++
+	}
+	if req.MaxUsageCount != nil {
+		updates = append(updates, fmt.Sprintf("max_usage_count = $%d", argPos))
+		args = append(args, req.MaxUsageCount)
+		argPos++
+	}
+	if req.IsActive != nil {
+		updates = append(updates, fmt.Sprintf("is_active = $%d", argPos))
+		args = append(args, *req.IsActive)
+		argPos++
+	}
+
+	if len(updates) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no_fields_to_update"})
+		return
+	}
+
+	updates = append(updates, fmt.Sprintf("updated_at = $%d", argPos))
+	args = append(args, time.Now())
+	argPos++
+
+	query := fmt.Sprintf("UPDATE promotions SET %s WHERE id = $%d", joinStrings(updates, ", "), argPos)
+	args = append(args, id)
+
+	if role == "MANAGER" {
+		query += fmt.Sprintf(" AND branch_id = $%d", argPos+1)
+		args = append(args, branchID)
+	}
+
+	result, err := db.Exec(query, args...)
+	if err != nil {
+		log.Printf("Failed to update promotion: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "promotion_not_found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "updated": true})
+}
+
+func deletePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	role := r.Header.Get("X-User-Role")
+	if role != "ADMIN" && role != "MANAGER" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	branchID := r.Header.Get("X-Branch-ID")
+	if branchID == "" && role == "MANAGER" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+		return
+	}
+
+	var result sql.Result
+	var err error
+
+	if role == "ADMIN" {
+		result, err = db.Exec(`DELETE FROM promotions WHERE id = $1`, id)
+	} else {
+		result, err = db.Exec(`DELETE FROM promotions WHERE id = $1 AND branch_id = $2`, id, branchID)
+	}
+
+	if err != nil {
+		log.Printf("Failed to delete promotion: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "promotion_not_found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
 }
 
 func evaluatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
@@ -234,4 +575,15 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func joinStrings(strs []string, sep string) string {
+	result := ""
+	for i, s := range strs {
+		if i > 0 {
+			result += sep
+		}
+		result += s
+	}
+	return result
 }
