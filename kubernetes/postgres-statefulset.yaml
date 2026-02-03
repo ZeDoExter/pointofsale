@@ -67,7 +67,7 @@ spec:
       volumes:
       - name: init-script
         configMap:
-          name: db-schema
+          name: pos-schema
   volumeClaimTemplates:
   - metadata:
       name: postgres-storage
