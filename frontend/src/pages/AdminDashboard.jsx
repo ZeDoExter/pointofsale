@@ -11,20 +11,13 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const token = localStorage.getItem('token');
-    const role = localStorage.getItem('role');
     if (!token) {
       navigate('/admin/login');
     } else {
-      // Check if user has admin or manager role
-      if (role !== 'ADMIN' && role !== 'MANAGER') {
-        alert('Access denied. This area is for admin/manager only.');
-        navigate('/admin/login');
-        return;
-      }
-      
       const name = localStorage.getItem('name');
+      const role = localStorage.getItem('role');
       const orgName = localStorage.getItem('organization_name');
-      
+
       setUser({ role, name, orgName });
       fetchStats();
     }
@@ -36,8 +29,9 @@ export default function AdminDashboard() {
       const response = await fetch('http://localhost:8080/api/orders', {
         headers: { 'Authorization': `Bearer ${token}` },
       });
-      const orders = await response.json();
-      
+      const data = await response.json();
+      const orders = Array.isArray(data) ? data : (data.orders || []);
+			
       setStats({
         orders: orders.length,
         revenue: orders.filter(o => o.status === 'PAID').reduce((sum, o) => sum + o.total_amount, 0),

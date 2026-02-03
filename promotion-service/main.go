@@ -29,7 +29,6 @@ type Promotion struct {
 	ValidUntil    *time.Time `json:"valid_until"`
 	MaxUsageCount *int       `json:"max_usage_count"`
 	IsActive      bool       `json:"is_active"`
-	BranchID      *string    `json:"branch_id,omitempty"`
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
 	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
 }
@@ -170,12 +169,6 @@ func createPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	branchID := r.Header.Get("X-Branch-ID")
-	if branchID == "" && role == "MANAGER" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
-		return
-	}
-
 	var req CreatePromotionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
@@ -194,9 +187,9 @@ func createPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 	promoID := uuid.New().String()
 	_, err := db.Exec(`
-		INSERT INTO promotions (id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, promoID, req.Code, req.Name, req.DiscountType, req.DiscountValue, req.MaxDiscount, req.MinOrderTotal, req.ValidFrom, req.ValidUntil, req.MaxUsageCount, req.IsActive, branchID)
+		INSERT INTO promotions (id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, promoID, req.Code, req.Name, req.DiscountType, req.DiscountValue, req.MaxDiscount, req.MinOrderTotal, req.ValidFrom, req.ValidUntil, req.MaxUsageCount, req.IsActive)
 
 	if err != nil {
 		log.Printf("Failed to create promotion: %v", err)
@@ -207,36 +200,25 @@ func createPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":        promoID,
 		"name":      req.Name,
-		"branch_id": branchID,
 		"is_active": req.IsActive,
 	})
 }
 
 func listPromotions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
-	branchID := r.Header.Get("X-Branch-ID")
 	role := r.Header.Get("X-User-Role")
+	if role != "ADMIN" && role != "MANAGER" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
 
 	var rows *sql.Rows
 	var err error
 
-	if role == "ADMIN" {
-		rows, err = db.Query(`
-			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
-			FROM promotions
-			ORDER BY created_at DESC
-		`)
-	} else {
-		if branchID == "" {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
-			return
-		}
-		rows, err = db.Query(`
-			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
-			FROM promotions
-			WHERE branch_id = $1
-			ORDER BY created_at DESC
-		`, branchID)
-	}
+	rows, err = db.Query(`
+		SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, created_at, updated_at
+		FROM promotions
+		ORDER BY created_at DESC
+	`)
 
 	if err != nil {
 		log.Printf("Failed to list promotions: %v", err)
@@ -248,7 +230,7 @@ func listPromotions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	promotions := []Promotion{}
 	for rows.Next() {
 		var p Promotion
-		err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.BranchID, &p.CreatedAt, &p.UpdatedAt)
+		err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 		if err != nil {
 			log.Printf("Failed to scan promotion: %v", err)
 			continue
@@ -263,29 +245,12 @@ func getPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	branchID := r.Header.Get("X-Branch-ID")
-	role := r.Header.Get("X-User-Role")
-
 	var p Promotion
-	var err error
-
-	if role == "ADMIN" {
-		err = db.QueryRow(`
-			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
-			FROM promotions
-			WHERE id = $1
-		`, id).Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.BranchID, &p.CreatedAt, &p.UpdatedAt)
-	} else {
-		if branchID == "" {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
-			return
-		}
-		err = db.QueryRow(`
-			SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, branch_id, created_at, updated_at
-			FROM promotions
-			WHERE id = $1 AND branch_id = $2
-		`, id, branchID).Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.BranchID, &p.CreatedAt, &p.UpdatedAt)
-	}
+	err := db.QueryRow(`
+		SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total, valid_from, valid_until, max_usage_count, is_active, created_at, updated_at
+		FROM promotions
+		WHERE id = $1
+	`, id).Scan(&p.ID, &p.Code, &p.Name, &p.DiscountType, &p.DiscountValue, &p.MaxDiscount, &p.MinOrderTotal, &p.ValidFrom, &p.ValidUntil, &p.MaxUsageCount, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "promotion_not_found"})
@@ -310,26 +275,10 @@ func updatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	branchID := r.Header.Get("X-Branch-ID")
-	if branchID == "" && role == "MANAGER" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
-		return
-	}
-
 	var req UpdatePromotionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 		return
-	}
-
-	// Check ownership
-	if role == "MANAGER" {
-		var exists string
-		err := db.QueryRow(`SELECT id FROM promotions WHERE id = $1 AND branch_id = $2`, id, branchID).Scan(&exists)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "promotion_not_found"})
-			return
-		}
 	}
 
 	// Build dynamic update query
@@ -395,11 +344,6 @@ func updatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	query := fmt.Sprintf("UPDATE promotions SET %s WHERE id = $%d", joinStrings(updates, ", "), argPos)
 	args = append(args, id)
 
-	if role == "MANAGER" {
-		query += fmt.Sprintf(" AND branch_id = $%d", argPos+1)
-		args = append(args, branchID)
-	}
-
 	result, err := db.Exec(query, args...)
 	if err != nil {
 		log.Printf("Failed to update promotion: %v", err)
@@ -426,20 +370,10 @@ func deletePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	branchID := r.Header.Get("X-Branch-ID")
-	if branchID == "" && role == "MANAGER" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
-		return
-	}
-
 	var result sql.Result
 	var err error
 
-	if role == "ADMIN" {
-		result, err = db.Exec(`DELETE FROM promotions WHERE id = $1`, id)
-	} else {
-		result, err = db.Exec(`DELETE FROM promotions WHERE id = $1 AND branch_id = $2`, id, branchID)
-	}
+	result, err = db.Exec(`DELETE FROM promotions WHERE id = $1`, id)
 
 	if err != nil {
 		log.Printf("Failed to delete promotion: %v", err)
@@ -468,19 +402,13 @@ func evaluatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	branchID := r.Header.Get("X-Branch-ID")
-	if branchID == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
-		return
-	}
-
 	var promo Promotion
 	err := db.QueryRow(`
 		SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total,
 		       valid_from, valid_until, max_usage_count, is_active
 		FROM promotions
-		WHERE code = $1 AND is_active = true AND branch_id = $2
-	`, req.Code, branchID).Scan(
+		WHERE code = $1 AND is_active = true
+	`, req.Code).Scan(
 		&promo.ID, &promo.Code, &promo.Name, &promo.DiscountType, &promo.DiscountValue,
 		&promo.MaxDiscount, &promo.MinOrderTotal, &promo.ValidFrom, &promo.ValidUntil,
 		&promo.MaxUsageCount, &promo.IsActive,
@@ -551,15 +479,9 @@ func applyPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	branchID := r.Header.Get("X-Branch-ID")
-	if branchID == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
-		return
-	}
-
-	// Verify promotion belongs to this branch
+	// Verify promotion exists
 	var promoID string
-	err := db.QueryRow(`SELECT id FROM promotions WHERE id = $1 AND branch_id = $2`, req.PromotionID, branchID).Scan(&promoID)
+	err := db.QueryRow(`SELECT id FROM promotions WHERE id = $1`, req.PromotionID).Scan(&promoID)
 	if err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "promotion_not_found"})
 		return
@@ -591,10 +513,6 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func getPromotionReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
-	branchID := r.Header.Get("X-Branch-ID")
-	organizationID := r.Header.Get("X-Organization-ID")
-	role := r.Header.Get("X-User-Role")
-
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
 
@@ -622,19 +540,6 @@ func getPromotionReport(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	`
 
 	args := []interface{}{from, to}
-	argPos := 3
-
-	if role == "ADMIN" {
-		// Admin sees all
-	} else if branchID != "" {
-		query += fmt.Sprintf(" AND p.branch_id = $%d", argPos)
-		args = append(args, branchID)
-		argPos++
-	} else if organizationID != "" {
-		query += fmt.Sprintf(" AND p.branch_id IN (SELECT id FROM branches WHERE organization_id = $%d)", argPos)
-		args = append(args, organizationID)
-		argPos++
-	}
 
 	query += " GROUP BY p.id ORDER BY usage_count DESC, total_discount DESC"
 

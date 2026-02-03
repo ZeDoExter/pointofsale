@@ -8,16 +8,65 @@ import UserMenu from './pages/UserMenu';
 import UserOrder from './pages/UserOrder';
 import './App.css';
 
+const getStoredRole = () => (localStorage.getItem('role') || '').toUpperCase();
+const getLandingPath = () => {
+  const role = getStoredRole();
+  if (role === 'ADMIN') return '/admin';
+  if (role === 'MANAGER') return '/manager';
+  if (role === 'CASHIER') return '/cashier';
+  return '/admin/login';
+};
+
+const ProtectedRoute = ({ roles, children }) => {
+  const token = localStorage.getItem('token');
+  const role = getStoredRole();
+
+  if (!token) return <Navigate to="/admin/login" replace />;
+  if (roles && !roles.includes(role)) return <Navigate to={getLandingPath()} replace />;
+
+  return children;
+};
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/admin/login" />} />
+        <Route path="/" element={<Navigate to={getLandingPath()} replace />} />
         <Route path="/admin/login" element={<AdminLogin />} />
-        <Route path="/admin/*" element={<AdminDashboard />} />
-        <Route path="/cashier" element={<CashierDashboard />} />
-        <Route path="/manager" element={<ManagerDashboard />} />
-        <Route path="/kitchen" element={<KitchenDisplay />} />
+
+        <Route
+          path="/admin/*"
+          element={(
+            <ProtectedRoute roles={['ADMIN']}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          )}
+        />
+        <Route
+          path="/manager"
+          element={(
+            <ProtectedRoute roles={['MANAGER']}>
+              <ManagerDashboard />
+            </ProtectedRoute>
+          )}
+        />
+        <Route
+          path="/cashier"
+          element={(
+            <ProtectedRoute roles={['CASHIER']}>
+              <CashierDashboard />
+            </ProtectedRoute>
+          )}
+        />
+        <Route
+          path="/kitchen"
+          element={(
+            <ProtectedRoute roles={['ADMIN', 'MANAGER', 'CASHIER']}>
+              <KitchenDisplay />
+            </ProtectedRoute>
+          )}
+        />
+
         <Route path="/user" element={<UserMenu />} />
         <Route path="/user/order/:orderId" element={<UserOrder />} />
       </Routes>
