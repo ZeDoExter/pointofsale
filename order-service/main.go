@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,18 @@ type Order struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+type QRSession struct {
+	ID             string     `json:"id"`
+	Token          string     `json:"token"`
+	TableID        int        `json:"table_id"`
+	TableNumber    int        `json:"table_number"`
+	BranchID       string     `json:"branch_id"`
+	OrganizationID string     `json:"organization_id"`
+	IsActive       bool       `json:"is_active"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ClosedAt       *time.Time `json:"closed_at"`
+}
+
 type OrderItem struct {
 	ID           string    `json:"id"`
 	OrderID      string    `json:"order_id"`
@@ -48,9 +61,10 @@ type OrderItem struct {
 }
 
 type CreateOrderRequest struct {
-	TableID   string            `json:"table_id"`
-	Items     []CreateOrderItem `json:"items"`
-	CreatedBy string            `json:"created_by"`
+	TableID        string            `json:"table_id"`
+	QrSessionToken string            `json:"qr_session_token"`
+	Items          []CreateOrderItem `json:"items"`
+	CreatedBy      string            `json:"created_by"`
 }
 
 type CreateOrderItem struct {
@@ -102,6 +116,14 @@ func nullable(value string) interface{} {
 		return nil
 	}
 	return value
+}
+
+// nullablePtr wraps nil-able string pointers for SQL parameters.
+func nullablePtr(value *string) interface{} {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 // resolveContext fills missing branch/org using table metadata when possible.
@@ -169,6 +191,207 @@ func guardOrderScope(db *sql.DB, orderID, branchID, orgID string) error {
 	return nil
 }
 
+// findActiveQRSession fetches a QR session by token.
+func findActiveQRSession(db *sql.DB, token string) (*QRSession, error) {
+	var sess QRSession
+	var closedAt sql.NullTime
+	row := db.QueryRow(`
+		SELECT qs.id, qs.qr_code_token, qs.table_id, qs.is_active, qs.created_at, qs.closed_at,
+		       t.table_number, b.id AS branch_id, b.organization_id
+		FROM qr_sessions qs
+		JOIN tables t ON qs.table_id = t.id
+		JOIN branches b ON t.branch_id = b.id
+		WHERE qs.qr_code_token = $1
+	`, token)
+	err := row.Scan(&sess.ID, &sess.Token, &sess.TableID, &sess.IsActive, &sess.CreatedAt, &closedAt, &sess.TableNumber, &sess.BranchID, &sess.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	if closedAt.Valid {
+		sess.ClosedAt = &closedAt.Time
+	}
+	return &sess, nil
+}
+
+// ensureTable returns an existing table id by number or creates it.
+func ensureTable(db *sql.DB, branchID string, tableNumber int) (int, error) {
+	if branchID == "" {
+		return 0, fmt.Errorf("branch_required")
+	}
+	var tableID int
+	err := db.QueryRow(`SELECT id FROM tables WHERE branch_id = $1 AND table_number = $2`, branchID, tableNumber).Scan(&tableID)
+	if err == nil {
+		return tableID, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	name := fmt.Sprintf("Table %d", tableNumber)
+	err = db.QueryRow(`
+		INSERT INTO tables (branch_id, table_number, name, capacity, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, 4, true, NOW(), NOW()) RETURNING id
+	`, branchID, tableNumber, name).Scan(&tableID)
+	return tableID, err
+}
+
+func createQRSession(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID, orgID, userID := tenantContext(r)
+	if branchID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "branch_required"})
+		return
+	}
+
+	var payload struct {
+		TableNumber int `json:"table_number"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+	if payload.TableNumber <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "table_number_required"})
+		return
+	}
+
+	tableID, err := ensureTable(db, branchID, payload.TableNumber)
+	if err != nil {
+		log.Printf("ensureTable failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	token := uuid.New().String()
+	var sessID string
+	err = db.QueryRow(`
+		INSERT INTO qr_sessions (id, table_id, qr_code_token, is_active, created_at)
+		VALUES ($1, $2, $3, true, NOW()) RETURNING id
+	`, uuid.New().String(), tableID, token).Scan(&sessID)
+	if err != nil {
+		log.Printf("Failed to create qr session: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	response := QRSession{
+		ID:             sessID,
+		Token:          token,
+		TableID:        tableID,
+		TableNumber:    payload.TableNumber,
+		BranchID:       branchID,
+		OrganizationID: orgID,
+		IsActive:       true,
+		CreatedAt:      time.Now(),
+	}
+
+	publishEvent("qr_session_opened", map[string]any{
+		"qr_session_id": sessID,
+		"table_number":  payload.TableNumber,
+		"opened_by":     userID,
+	}, branchID, orgID)
+
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func listQRSessions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID, orgID, _ := tenantContext(r)
+	if branchID == "" && orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "branch_required"})
+		return
+	}
+
+	status := strings.ToUpper(r.URL.Query().Get("status"))
+	if status == "" {
+		status = "OPEN"
+	}
+
+	query := `
+		SELECT qs.id, qs.qr_code_token, qs.table_id, qs.is_active, qs.created_at, qs.closed_at,
+		       t.table_number, b.id AS branch_id, b.organization_id
+		FROM qr_sessions qs
+		JOIN tables t ON qs.table_id = t.id
+		JOIN branches b ON t.branch_id = b.id
+		WHERE 1=1`
+	var args []any
+	idx := 1
+
+	if branchID != "" {
+		query += fmt.Sprintf(" AND b.id = $%d", idx)
+		args = append(args, branchID)
+		idx++
+	} else if orgID != "" {
+		query += fmt.Sprintf(" AND b.organization_id = $%d", idx)
+		args = append(args, orgID)
+		idx++
+	}
+
+	if status == "OPEN" {
+		query += " AND qs.is_active = true"
+	} else if status == "CLOSED" {
+		query += " AND qs.is_active = false"
+	}
+
+	query += " ORDER BY qs.created_at DESC LIMIT 100"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Failed to list qr sessions: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	var sessions []QRSession
+	for rows.Next() {
+		var sess QRSession
+		var closedAt sql.NullTime
+		if err := rows.Scan(&sess.ID, &sess.Token, &sess.TableID, &sess.IsActive, &sess.CreatedAt, &closedAt, &sess.TableNumber, &sess.BranchID, &sess.OrganizationID); err != nil {
+			log.Printf("Scan qr session failed: %v", err)
+			continue
+		}
+		if closedAt.Valid {
+			sess.ClosedAt = &closedAt.Time
+		}
+		sessions = append(sessions, sess)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+func closeQRSession(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	branchID, orgID, userID := tenantContext(r)
+	if branchID == "" && orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "branch_required"})
+		return
+	}
+
+	res, err := db.Exec(`
+		UPDATE qr_sessions SET is_active = false, closed_at = NOW()
+		WHERE id = $1 AND is_active = true AND EXISTS (
+			SELECT 1 FROM tables t JOIN branches b ON t.branch_id = b.id
+			WHERE t.id = qr_sessions.table_id AND (b.id = $2 OR b.organization_id = $3)
+		)
+	`, id, branchID, orgID)
+	if err != nil {
+		log.Printf("Failed to close qr session: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session_not_found"})
+		return
+	}
+
+	publishEvent("qr_session_closed", map[string]any{
+		"qr_session_id": id,
+		"closed_by":     userID,
+	}, branchID, orgID)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -232,6 +455,19 @@ func main() {
 		updateOrderStatus(db, w, r)
 	}).Methods(http.MethodPut)
 
+	// QR Sessions
+	router.HandleFunc("/api/qr-sessions", func(w http.ResponseWriter, r *http.Request) {
+		createQRSession(db, w, r)
+	}).Methods(http.MethodPost)
+
+	router.HandleFunc("/api/qr-sessions", func(w http.ResponseWriter, r *http.Request) {
+		listQRSessions(db, w, r)
+	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/qr-sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		closeQRSession(db, w, r)
+	}).Methods(http.MethodPut)
+
 	// Reports endpoints
 	router.HandleFunc("/api/reports/sales", func(w http.ResponseWriter, r *http.Request) {
 		getSalesReport(db, w, r)
@@ -285,6 +521,29 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// If QR session token provided, resolve table + tenant context from session
+	var qrSessionID *string
+	if req.QrSessionToken != "" {
+		sess, err := findActiveQRSession(db, req.QrSessionToken)
+		if err == sql.ErrNoRows {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_qr_session"})
+			return
+		}
+		if err != nil {
+			log.Printf("Failed to fetch qr session: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+			return
+		}
+		if !sess.IsActive {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "qr_session_closed"})
+			return
+		}
+		qrSessionID = &sess.ID
+		tableID = &sess.TableID
+		branchID = sess.BranchID
+		orgID = sess.OrganizationID
+	}
+
 	branchID, orgID, err := resolveContext(db, branchID, orgID, tableID)
 	if err != nil {
 		if err.Error() == "table_not_found" || err.Error() == "branch_not_found" {
@@ -326,9 +585,9 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(`
-		INSERT INTO orders (id, organization_id, branch_id, table_id, order_number, status, subtotal, tax, total_amount, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 'OPEN', $6, $7, $8, $9, NOW(), NOW())
-	`, orderID, nullable(orgID), nullable(branchID), tableID, orderNumber, subtotal, tax, subtotal+tax, nullable(req.CreatedBy))
+		INSERT INTO orders (id, organization_id, branch_id, table_id, qr_session_id, order_number, status, subtotal, tax, total_amount, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', $7, $8, $9, $10, NOW(), NOW())
+	`, orderID, nullable(orgID), nullable(branchID), tableID, nullablePtr(qrSessionID), orderNumber, subtotal, tax, subtotal+tax, nullable(req.CreatedBy))
 
 	if err != nil {
 		log.Printf("Failed to create order: %v", err)

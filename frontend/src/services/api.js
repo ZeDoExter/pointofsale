@@ -40,6 +40,12 @@ export const orderAPI = {
   updateStatus: (id, status) => api.put(`/api/orders/${id}/status`, { status }),
 };
 
+export const sessionAPI = {
+  list: (params) => api.get('/api/qr-sessions', { params }),
+  create: (tableNumber) => api.post('/api/qr-sessions', { table_number: tableNumber }),
+  close: (id) => api.put(`/api/qr-sessions/${id}/close`),
+};
+
 export const promotionAPI = {
   evaluate: (code, orderTotal) => api.post('/api/promotions/evaluate', { code, order_total: orderTotal }),
   apply: (code, orderId) => api.post('/api/promotions/apply', { code, order_id: orderId }),

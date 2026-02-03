@@ -54,6 +54,18 @@ type Branch struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+type ManagerUser struct {
+	ID             string     `json:"id"`
+	Username       string     `json:"username"`
+	Name           string     `json:"name"`
+	OrganizationID string     `json:"organization_id"`
+	Organization   string     `json:"organization_name"`
+	BranchID       string     `json:"branch_id"`
+	Branch         string     `json:"branch_name"`
+	LastLoginAt    *time.Time `json:"last_login_at"`
+	IsActive       bool       `json:"is_active"`
+}
+
 type CreateOrgRequest struct {
 	Name         string `json:"name"`
 	Slug         string `json:"slug"`
@@ -363,6 +375,11 @@ func main() {
 	router.HandleFunc("/api/organizations/{orgId}/branches/{id}", func(w http.ResponseWriter, r *http.Request) {
 		updateBranch(db, w, r)
 	}).Methods(http.MethodPut)
+
+	// Manager directory for admins
+	router.HandleFunc("/api/users/managers", func(w http.ResponseWriter, r *http.Request) {
+		listManagers(db, w, r)
+	}).Methods(http.MethodGet)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
@@ -678,4 +695,95 @@ func updateBranch(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// listManagers returns active managers with org/branch context for admins.
+func listManagers(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	role := r.Header.Get("X-User-Role")
+	if role != "ADMIN" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin_required"})
+		return
+	}
+
+	orgFilter := strings.TrimSpace(r.URL.Query().Get("organization_id"))
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+
+	if orgFilter == "" {
+		rows, err = db.Query(`
+			SELECT u.id,
+			       u.username,
+			       u.name,
+			       u.organization_id,
+			       o.name AS organization_name,
+			       u.branch_id,
+			       b.name AS branch_name,
+			       u.last_login_at,
+			       u.is_active
+			FROM users u
+			LEFT JOIN organizations o ON u.organization_id = o.id
+			LEFT JOIN branches b ON u.branch_id = b.id
+			WHERE LOWER(u.role) = 'manager'
+			  AND u.is_active = true
+			ORDER BY o.name NULLS LAST, b.name NULLS LAST, u.name
+		`)
+	} else {
+		rows, err = db.Query(`
+			SELECT u.id,
+			       u.username,
+			       u.name,
+			       u.organization_id,
+			       o.name AS organization_name,
+			       u.branch_id,
+			       b.name AS branch_name,
+			       u.last_login_at,
+			       u.is_active
+			FROM users u
+			LEFT JOIN organizations o ON u.organization_id = o.id
+			LEFT JOIN branches b ON u.branch_id = b.id
+			WHERE LOWER(u.role) = 'manager'
+			  AND u.is_active = true
+			  AND u.organization_id = $1
+			ORDER BY o.name NULLS LAST, b.name NULLS LAST, u.name
+		`, orgFilter)
+	}
+	if err != nil {
+		log.Printf("Failed to list managers: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	var managers []ManagerUser
+	for rows.Next() {
+		var m ManagerUser
+		var orgID, branchID sql.NullString
+		var orgName, branchName sql.NullString
+		var lastLogin sql.NullTime
+		if err := rows.Scan(&m.ID, &m.Username, &m.Name, &orgID, &orgName, &branchID, &branchName, &lastLogin, &m.IsActive); err != nil {
+			log.Printf("Scan manager failed: %v", err)
+			continue
+		}
+		if orgID.Valid {
+			m.OrganizationID = orgID.String
+		}
+		if orgName.Valid {
+			m.Organization = orgName.String
+		}
+		if branchID.Valid {
+			m.BranchID = branchID.String
+		}
+		if branchName.Valid {
+			m.Branch = branchName.String
+		}
+		if lastLogin.Valid {
+			m.LastLoginAt = &lastLogin.Time
+		}
+		managers = append(managers, m)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"managers": managers})
 }

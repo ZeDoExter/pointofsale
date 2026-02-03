@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../App.css';
-import { orderAPI } from '../services/api';
+import { orderAPI, sessionAPI } from '../services/api';
 
 const CashierDashboard = () => {
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [sessionForm, setSessionForm] = useState({ table_number: '' });
+  const [activeSessionId, setActiveSessionId] = useState('');
   const [showCreateOrder, setShowCreateOrder] = useState(false);
   const [newOrder, setNewOrder] = useState({
     table_id: '',
@@ -17,21 +20,76 @@ const CashierDashboard = () => {
 
   useEffect(() => {
     fetchOrders();
+    fetchSessions();
   }, []);
 
-  const fetchOrders = async () => {
-    try {
-      const { data } = await orderAPI.list();
-      const list = Array.isArray(data) ? data : (Array.isArray(data?.orders) ? data.orders : []);
-      setOrders(list);
-    } catch (error) {
-      console.error('Failed to fetch orders:', error);
+  useEffect(() => {
+    const active = sessions.find((s) => s.id === activeSessionId);
+    if (active) {
+      setNewOrder((prev) => ({ ...prev, table_id: active.table_id }));
     }
+  }, [activeSessionId, sessions]);
+
+  const fetchSessions = async () => {
+    try {
+      const { data } = await sessionAPI.list({ status: 'OPEN' });
+      const list = Array.isArray(data?.sessions) ? data.sessions : [];
+      setSessions(list);
+      if (!activeSessionId && list.length > 0) {
+        setActiveSessionId(list[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to load sessions:', err);
+    }
+  };
+
+  const createSession = async () => {
+    if (!sessionForm.table_number.trim()) {
+      alert('Please provide a table number');
+      return;
+    }
+    try {
+      const tableNumber = Number(sessionForm.table_number);
+      if (Number.isNaN(tableNumber) || tableNumber <= 0) {
+        alert('Table number must be a positive number');
+        return;
+      }
+      const { data } = await sessionAPI.create(tableNumber);
+      const next = [data, ...sessions];
+      setSessions(next);
+      setActiveSessionId(data.id);
+      setSessionForm({ table_number: '' });
+    } catch (err) {
+      console.error('Failed to create session:', err);
+      alert('Failed to create session');
+    }
+  };
+
+  const closeSession = async (sessionId) => {
+    try {
+      await sessionAPI.close(sessionId);
+      setSessions((prev) => prev.map((s) => (
+        s.id === sessionId ? { ...s, is_active: false, closed_at: new Date().toISOString() } : s
+      )));
+      if (activeSessionId === sessionId) {
+        setActiveSessionId('');
+      }
+    } catch (err) {
+      console.error('Failed to close session:', err);
+      alert('Failed to close session');
+    }
+  };
+
+  const sessionLink = (session) => {
+    const base = window.location.origin;
+    const params = new URLSearchParams({ session: session.token, table: session.table_number });
+    return `${base}/user?${params.toString()}`;
   };
 
   const createOrder = async () => {
     try {
       const userId = localStorage.getItem('user_id');
+      const activeSession = sessions.find((s) => s.id === activeSessionId);
       const items = newOrder.items
         .filter(item => item.item_name && !Number.isNaN(Number(item.price)))
         .map(item => ({
@@ -46,14 +104,15 @@ const CashierDashboard = () => {
       }
 
       await orderAPI.create({
-        table_id: newOrder.table_id || '',
+        table_id: newOrder.table_id || activeSession?.table_id || '',
         items,
         created_by: userId,
+        qr_session_token: activeSession?.token,
       });
 
       alert('Order created successfully!');
       setShowCreateOrder(false);
-      setNewOrder({ table_id: '', items: [{ item_name: '', price: '', quantity: 1 }] });
+      setNewOrder({ table_id: activeSession?.table_id || '', items: [{ item_name: '', price: '', quantity: 1 }] });
       fetchOrders();
     } catch (error) {
       console.error('Failed to create order:', error);
@@ -89,6 +148,12 @@ const CashierDashboard = () => {
     setNewOrder({ ...newOrder, items });
   };
 
+  const toggleCreateOrder = () => {
+    const active = sessions.find((s) => s.id === activeSessionId);
+    setNewOrder((prev) => ({ ...prev, table_id: prev.table_id || active?.table_id || '' }));
+    setShowCreateOrder(!showCreateOrder);
+  };
+
   const handleLogout = () => {
     localStorage.clear();
     navigate('/');
@@ -122,20 +187,6 @@ const CashierDashboard = () => {
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
-            onClick={() => navigate('/kitchen')}
-            style={{
-              padding: '10px 20px',
-              backgroundColor: '#6b7280',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-          >
-            🍳 Kitchen View
-          </button>
-          <button
             onClick={handleLogout}
             style={{
               padding: '10px 20px',
@@ -154,10 +205,114 @@ const CashierDashboard = () => {
 
       {/* Main Content */}
       <div style={{ padding: '30px' }}>
+        {/* Table Sessions */}
+        <div style={{ marginBottom: '24px', backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>Table Sessions</h2>
+              <p style={{ margin: 0, color: '#6b7280' }}>Open a session to generate a QR link for guests; tie orders to that table.</p>
+            </div>
+            <button
+              onClick={fetchOrders}
+              style={{ padding: '10px 16px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+            >
+              🔄 Refresh Orders
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div style={{ border: '1px dashed #d1d5db', borderRadius: '10px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px 0' }}>Open Session</h4>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  placeholder="Table number"
+                  value={sessionForm.table_number}
+                  onChange={(e) => setSessionForm({ table_number: e.target.value })}
+                  style={{ flex: 1, padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }}
+                />
+                <button
+                  onClick={createSession}
+                  style={{ padding: '10px 16px', backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                >
+                  Open
+                </button>
+              </div>
+            </div>
+
+            {activeSessionId && (
+              <div style={{ border: '1px solid #d1d5db', borderRadius: '10px', padding: '12px', backgroundColor: '#f0fdf4' }}>
+                <h4 style={{ margin: '0 0 6px 0' }}>Active Session</h4>
+                {(() => {
+                  const session = sessions.find((s) => s.id === activeSessionId);
+                  if (!session) return null;
+                  return (
+                    <div>
+                      <div style={{ fontWeight: 'bold' }}>Table {session.table_number}</div>
+                      <div style={{ color: '#6b7280', fontSize: '13px' }}>Status: {session.is_active ? 'OPEN' : 'CLOSED'}</div>
+                      <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                        Share: <a href={sessionLink(session)}>{sessionLink(session)}</a>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
+          {sessions.length > 0 && (
+            <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+              {sessions.map((session) => (
+                <div key={session.id} style={{
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '12px',
+                  padding: '14px',
+                  backgroundColor: activeSessionId === session.id ? '#eff6ff' : '#f9fafb'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 'bold' }}>Table {session.table_number}</div>
+                      <div style={{ color: '#6b7280', fontSize: '12px' }}>Token: {session.token.slice(0, 8)}...</div>
+                    </div>
+                    <span style={{
+                      padding: '4px 10px',
+                      borderRadius: '9999px',
+                      fontSize: '11px',
+                      backgroundColor: session.is_active ? '#d1fae5' : '#fef3c7',
+                      color: session.is_active ? '#065f46' : '#92400e',
+                      fontWeight: 'bold'
+                    }}>
+                      {session.is_active ? 'OPEN' : 'CLOSED'}
+                    </span>
+                  </div>
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#4b5563', wordBreak: 'break-all' }}>
+                    {sessionLink(session)}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                    <button
+                      onClick={() => setActiveSessionId(session.id)}
+                      style={{ flex: 1, padding: '8px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                      Use
+                    </button>
+                    <button
+                      onClick={() => closeSession(session.id)}
+                      disabled={!session.is_active}
+                      style={{ flex: 1, padding: '8px', backgroundColor: session.is_active ? '#ef4444' : '#9ca3af', color: 'white', border: 'none', borderRadius: '8px', cursor: session.is_active ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Action Bar */}
         <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
           <button
-            onClick={() => setShowCreateOrder(!showCreateOrder)}
+            onClick={toggleCreateOrder}
             style={{
               padding: '12px 24px',
               backgroundColor: '#10b981',

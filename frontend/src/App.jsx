@@ -3,7 +3,6 @@ import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
 import CashierDashboard from './pages/CashierDashboard';
 import ManagerDashboard from './pages/ManagerDashboard';
-import KitchenDisplay from './pages/KitchenDisplay';
 import UserMenu from './pages/UserMenu';
 import UserOrder from './pages/UserOrder';
 import './App.css';
@@ -55,14 +54,6 @@ function App() {
           element={(
             <ProtectedRoute roles={['CASHIER']}>
               <CashierDashboard />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/kitchen"
-          element={(
-            <ProtectedRoute roles={['ADMIN', 'MANAGER', 'CASHIER']}>
-              <KitchenDisplay />
             </ProtectedRoute>
           )}
         />

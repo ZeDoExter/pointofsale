@@ -11,6 +11,13 @@ const ManagerDashboard = () => {
   const [promotionReport, setPromotionReport] = useState([]);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [catalog, setCatalog] = useState(() => {
+    const stored = localStorage.getItem('manager_catalog');
+    return stored ? JSON.parse(stored) : [];
+  });
+  const [selectedTypeId, setSelectedTypeId] = useState('');
+  const [typeForm, setTypeForm] = useState({ name: '', description: '', is_available: true });
+  const [optionForm, setOptionForm] = useState({ label: '', price_delta: 0, is_required: false, is_available: true });
 
   const userName = localStorage.getItem('name') || 'Manager';
   const orgName = localStorage.getItem('organization_name') || 'Organization';
@@ -73,6 +80,59 @@ const ManagerDashboard = () => {
     setLoading(false);
   };
 
+  const persistCatalog = (nextCatalog) => {
+    setCatalog(nextCatalog);
+    localStorage.setItem('manager_catalog', JSON.stringify(nextCatalog));
+  };
+
+  const addProductType = () => {
+    if (!typeForm.name.trim()) return;
+    const newType = {
+      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`,
+      name: typeForm.name.trim(),
+      description: typeForm.description.trim(),
+      is_available: typeForm.is_available,
+      options: [],
+    };
+    const next = [...catalog, newType];
+    persistCatalog(next);
+    setSelectedTypeId(newType.id);
+    setTypeForm({ name: '', description: '', is_available: true });
+  };
+
+  const toggleTypeAvailability = (typeId) => {
+    const next = catalog.map((type) => (
+      type.id === typeId ? { ...type, is_available: !type.is_available } : type
+    ));
+    persistCatalog(next);
+  };
+
+  const addOptionToType = () => {
+    if (!selectedTypeId || !optionForm.label.trim()) return;
+    const next = catalog.map((type) => {
+      if (type.id !== selectedTypeId) return type;
+      const option = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`,
+        label: optionForm.label.trim(),
+        price_delta: Number(optionForm.price_delta) || 0,
+        is_required: optionForm.is_required,
+        is_available: optionForm.is_available,
+      };
+      return { ...type, options: [...(type.options || []), option] };
+    });
+    persistCatalog(next);
+    setOptionForm({ label: '', price_delta: 0, is_required: false, is_available: true });
+  };
+
+  const toggleOptionAvailability = (typeId, optionId) => {
+    const next = catalog.map((type) => {
+      if (type.id !== typeId) return type;
+      const options = (type.options || []).map((opt) => opt.id === optionId ? { ...opt, is_available: !opt.is_available } : opt);
+      return { ...type, options };
+    });
+    persistCatalog(next);
+  };
+
   const handleLogout = () => {
     localStorage.clear();
     navigate('/');
@@ -102,20 +162,6 @@ const ManagerDashboard = () => {
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
-            onClick={() => navigate('/kitchen')}
-            style={{
-              padding: '10px 20px',
-              backgroundColor: '#6b7280',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-          >
-            🍳 Kitchen
-          </button>
-          <button
             onClick={handleLogout}
             style={{
               padding: '10px 20px',
@@ -139,7 +185,7 @@ const ManagerDashboard = () => {
         padding: '0 30px'
       }}>
         <div style={{ display: 'flex', gap: '20px' }}>
-          {['overview', 'sales', 'promotions'].map((tab) => (
+          {['overview', 'catalog', 'sales', 'promotions'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -251,6 +297,184 @@ const ManagerDashboard = () => {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {/* Catalog Tab */}
+            {activeTab === 'catalog' && (
+              <div>
+                <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '12px' }}>Product Types & Options</h2>
+                <p style={{ color: '#6b7280', marginBottom: '20px' }}>
+                  Manage availability, required options, and price adjustments. Data is stored locally until backend endpoints are ready.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
+                  <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>Product Types</h3>
+                      <span style={{ color: '#6b7280', fontSize: '13px' }}>{catalog.length} types</span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                      {catalog.map((type) => (
+                        <button
+                          key={type.id}
+                          onClick={() => setSelectedTypeId(type.id)}
+                          style={{
+                            textAlign: 'left',
+                            padding: '12px',
+                            borderRadius: '10px',
+                            border: type.id === selectedTypeId ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                            backgroundColor: type.id === selectedTypeId ? '#eff6ff' : '#ffffff',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <div style={{ fontWeight: 'bold' }}>{type.name}</div>
+                              <div style={{ color: '#6b7280', fontSize: '12px' }}>{type.description || 'No description'}</div>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                              <input
+                                type="checkbox"
+                                checked={type.is_available}
+                                onChange={(e) => { e.stopPropagation(); toggleTypeAvailability(type.id); }}
+                              />
+                              Available
+                            </label>
+                          </div>
+                        </button>
+                      ))}
+                      {catalog.length === 0 && (
+                        <p style={{ color: '#6b7280', margin: 0 }}>No product types yet.</p>
+                      )}
+                    </div>
+
+                    <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '12px' }}>
+                      <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 'bold' }}>Add Type</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <input
+                          placeholder="Name (e.g., Pizza)"
+                          value={typeForm.name}
+                          onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })}
+                          style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+                        />
+                        <textarea
+                          placeholder="Description"
+                          value={typeForm.description}
+                          onChange={(e) => setTypeForm({ ...typeForm, description: e.target.value })}
+                          style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db', minHeight: '80px' }}
+                        />
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                          <input
+                            type="checkbox"
+                            checked={typeForm.is_available}
+                            onChange={(e) => setTypeForm({ ...typeForm, is_available: e.target.checked })}
+                          />
+                          Available
+                        </label>
+                        <button
+                          onClick={addProductType}
+                          style={{ padding: '10px', backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                        >
+                          Save Type
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>Options</h3>
+                      <span style={{ color: '#6b7280', fontSize: '13px' }}>
+                        {selectedTypeId ? 'Linked to selection' : 'Select a type first'}
+                      </span>
+                    </div>
+
+                    {!selectedTypeId && (
+                      <p style={{ color: '#6b7280', margin: 0 }}>Choose a product type to manage its options.</p>
+                    )}
+
+                    {selectedTypeId && (
+                      <>
+                        {catalog.find((t) => t.id === selectedTypeId)?.options?.length === 0 && (
+                          <p style={{ color: '#6b7280' }}>No options yet for this type.</p>
+                        )}
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                          {catalog.find((t) => t.id === selectedTypeId)?.options?.map((opt) => (
+                            <div key={opt.id} style={{
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '10px',
+                              padding: '12px',
+                              backgroundColor: '#f9fafb'
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                  <div style={{ fontWeight: 'bold' }}>{opt.label}</div>
+                                  <div style={{ color: '#6b7280', fontSize: '12px' }}>
+                                    {opt.is_required ? 'Required • ' : ''}Price adj: ฿{Number(opt.price_delta || 0).toFixed(2)}
+                                  </div>
+                                </div>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={opt.is_available}
+                                    onChange={() => toggleOptionAvailability(selectedTypeId, opt.id)}
+                                  />
+                                  Available
+                                </label>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '12px' }}>
+                          <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 'bold' }}>Add Option</h4>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '10px', marginBottom: '10px' }}>
+                            <input
+                              placeholder="Label (e.g., Large, Extra cheese)"
+                              value={optionForm.label}
+                              onChange={(e) => setOptionForm({ ...optionForm, label: e.target.value })}
+                              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+                            />
+                            <input
+                              type="number"
+                              placeholder="Price Δ"
+                              value={optionForm.price_delta}
+                              onChange={(e) => setOptionForm({ ...optionForm, price_delta: e.target.value })}
+                              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', gap: '12px', marginBottom: '10px', alignItems: 'center' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px' }}>
+                              <input
+                                type="checkbox"
+                                checked={optionForm.is_required}
+                                onChange={(e) => setOptionForm({ ...optionForm, is_required: e.target.checked })}
+                              />
+                              Required
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px' }}>
+                              <input
+                                type="checkbox"
+                                checked={optionForm.is_available}
+                                onChange={(e) => setOptionForm({ ...optionForm, is_available: e.target.checked })}
+                              />
+                              Available
+                            </label>
+                            <button
+                              onClick={addOptionToType}
+                              style={{ padding: '10px 16px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                            >
+                              Save Option
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

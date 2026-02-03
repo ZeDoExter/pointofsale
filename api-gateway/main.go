@@ -62,9 +62,11 @@ func main() {
 
 	router.PathPrefix("/api/auth").Handler(proxyTo(services["auth"]))
 	router.PathPrefix("/api/organizations").Handler(proxyTo(services["auth"]))
+	router.PathPrefix("/api/users").Handler(proxyTo(services["auth"]))
 	router.PathPrefix("/api/orders").Handler(proxyTo(services["order"]))
 	router.PathPrefix("/api/promotions").Handler(proxyTo(services["promotion"]))
 	router.PathPrefix("/api/payments").Handler(proxyTo(services["payment"]))
+	router.PathPrefix("/api/qr-sessions").Handler(proxyTo(services["order"]))
 	router.PathPrefix("/api/reports").Handler(proxyTo(services["order"])) // Reports go to order service
 	router.PathPrefix("/ws").Handler(proxyTo(services["notification"]))   // WebSocket
 	router.PathPrefix("/api/events").Handler(proxyTo(services["notification"]))

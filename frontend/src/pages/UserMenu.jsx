@@ -1,11 +1,21 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { orderAPI } from '../services/api';
 
 export default function UserMenu() {
   const [tableId, setTableId] = useState('');
   const [cart, setCart] = useState([]);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const sessionToken = searchParams.get('session') || '';
+  const tableFromLink = searchParams.get('table') || '';
+
+  useEffect(() => {
+    if (tableFromLink) {
+      setTableId(tableFromLink);
+    }
+  }, [tableFromLink]);
 
   const menuItems = [
     { name: 'ผัดไทย', price: 60 },
@@ -49,6 +59,7 @@ export default function UserMenu() {
       const { data } = await orderAPI.create({
         table_id: tableId || null,
         items: cart,
+        qr_session_token: sessionToken || undefined,
       });
       navigate(`/user/order/${data.order_id}`);
     } catch (err) {
@@ -61,6 +72,12 @@ export default function UserMenu() {
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px' }}>
       <h1>🍜 Restaurant Menu</h1>
+
+      {sessionToken && (
+        <div style={{ margin: '10px 0 20px 0', padding: '12px', backgroundColor: '#ecfeff', border: '1px solid #bae6fd', borderRadius: '8px', color: '#0ea5e9' }}>
+          Linked to table session: {tableFromLink || 'N/A'}
+        </div>
+      )}
       
       <div style={{ marginBottom: '20px' }}>
         <label>โต๊ะ: </label>
@@ -69,6 +86,7 @@ export default function UserMenu() {
           value={tableId}
           onChange={(e) => setTableId(e.target.value)}
           placeholder="เช่น A1"
+          disabled={!!tableFromLink}
           style={{ padding: '5px', marginLeft: '10px' }}
         />
       </div>
