@@ -13,23 +13,47 @@
 -- TABLES SCHEMA
 -- ============================================================================
 
+-- 0. ORGANIZATIONS (Tenants)
+CREATE TABLE organizations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 0.1 BRANCHES (Physical locations)
+CREATE TABLE branches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_branches_org ON branches(organization_id);
+
 -- 1. USERS (Staff login)
 -- Staff accounts for POS
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  username VARCHAR(50) NOT NULL UNIQUE,
+  username VARCHAR(50) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   role VARCHAR(20) NOT NULL, -- 'cashier', 'manager', 'admin'
   name VARCHAR(100) NOT NULL,
+  organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+  branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT uq_user_org UNIQUE (username, organization_id)
 );
 
 -- 2. TABLES (Physical tables in restaurant)
 -- Easy to create/delete/manage
 CREATE TABLE tables (
   id SERIAL PRIMARY KEY,
+  branch_id UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
   table_number INT NOT NULL UNIQUE,
   name VARCHAR(100) NOT NULL, -- e.g., "Table 5", "Bar Seat 3"
   capacity INT NOT NULL DEFAULT 4,
@@ -64,6 +88,8 @@ CREATE INDEX idx_qr_sessions_token ON qr_sessions(qr_code_token);
 --   - Takeaway (no table)
 CREATE TABLE orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+  branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
   table_id INT REFERENCES tables(id), -- NULL for takeaway
   qr_session_id UUID REFERENCES qr_sessions(id), -- NULL if not QR
   order_number INT NOT NULL, -- for display (e.g., "#0001")
@@ -136,6 +162,9 @@ CREATE TABLE promotions (
   code VARCHAR(50) UNIQUE, -- NULL for auto-applied promos
   name VARCHAR(255) NOT NULL,
   description TEXT,
+
+  organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+  branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
   
   -- Discount type
   discount_type VARCHAR(20) NOT NULL, -- FIXED_AMOUNT, PERCENTAGE
