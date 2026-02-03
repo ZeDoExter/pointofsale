@@ -114,13 +114,19 @@ func evaluatePromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	branchID := r.Header.Get("X-Branch-ID")
+	if branchID == "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+		return
+	}
+
 	var promo Promotion
 	err := db.QueryRow(`
 		SELECT id, code, name, discount_type, discount_value, max_discount, min_order_total,
 		       valid_from, valid_until, max_usage_count, is_active
 		FROM promotions
-		WHERE code = $1 AND is_active = true
-	`, req.Code).Scan(
+		WHERE code = $1 AND is_active = true AND branch_id = $2
+	`, req.Code, branchID).Scan(
 		&promo.ID, &promo.Code, &promo.Name, &promo.DiscountType, &promo.DiscountValue,
 		&promo.MaxDiscount, &promo.MinOrderTotal, &promo.ValidFrom, &promo.ValidUntil,
 		&promo.MaxUsageCount, &promo.IsActive,
@@ -191,8 +197,22 @@ func applyPromotion(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	branchID := r.Header.Get("X-Branch-ID")
+	if branchID == "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+		return
+	}
+
+	// Verify promotion belongs to this branch
+	var promoID string
+	err := db.QueryRow(`SELECT id FROM promotions WHERE id = $1 AND branch_id = $2`, req.PromotionID, branchID).Scan(&promoID)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "promotion_not_found"})
+		return
+	}
+
 	usageID := uuid.New().String()
-	_, err := db.Exec(`
+	_, err = db.Exec(`
 		INSERT INTO promotion_usage (id, promotion_id, order_id, used_at)
 		VALUES ($1, $2, $3, NOW())
 	`, usageID, req.PromotionID, req.OrderID)

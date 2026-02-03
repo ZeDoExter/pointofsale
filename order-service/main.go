@@ -148,6 +148,15 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract scope from headers (set by API gateway)
+	branchID := r.Header.Get("X-Branch-ID")
+	organizationID := r.Header.Get("X-Organization-ID")
+
+	if branchID == "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "branch_required"})
+		return
+	}
+
 	// If no created_by provided (guest order), use NULL
 	var createdBy *string
 	if req.CreatedBy != "" {
@@ -164,7 +173,7 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	var orderNumber int
-	err := db.QueryRow("SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders").Scan(&orderNumber)
+	err := db.QueryRow("SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE branch_id = $1", branchID).Scan(&orderNumber)
 	if err != nil {
 		log.Printf("Failed to get order number: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
@@ -187,9 +196,9 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(`
-		INSERT INTO orders (id, table_id, order_number, status, subtotal, tax, total_amount, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, 'OPEN', $4, $5, $6, $7, NOW(), NOW())
-	`, orderID, tableID, orderNumber, subtotal, tax, subtotal+tax, createdBy)
+		INSERT INTO orders (id, organization_id, branch_id, table_id, order_number, status, subtotal, tax, total_amount, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, 'OPEN', $6, $7, $8, $9, NOW(), NOW())
+	`, orderID, organizationID, branchID, tableID, orderNumber, subtotal, tax, subtotal+tax, createdBy)
 
 	if err != nil {
 		log.Printf("Failed to create order: %v", err)
@@ -227,13 +236,14 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 func getOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	branchID := r.Header.Get("X-Branch-ID")
 
 	var order Order
 	err := db.QueryRow(`
 		SELECT id, table_id, order_number, status, subtotal, tax, discount_amount, 
 		       total_amount, created_by, created_at, updated_at
-		FROM orders WHERE id = $1
-	`, id).Scan(
+		FROM orders WHERE id = $1 AND branch_id = $2
+	`, id, branchID).Scan(
 		&order.ID, &order.TableID, &order.OrderNumber, &order.Status,
 		&order.Subtotal, &order.Tax, &order.DiscountAmount, &order.TotalAmount,
 		&order.CreatedBy, &order.CreatedAt, &order.UpdatedAt,
@@ -340,12 +350,14 @@ func addOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 }
 
 func listOrders(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	branchID := r.Header.Get("X-Branch-ID")
 	status := r.URL.Query().Get("status")
 	tableID := r.URL.Query().Get("table_id")
 
 	query := `SELECT id, table_id, order_number, status, subtotal, tax, discount_amount, 
-	       total_amount, created_by, created_at, updated_at FROM orders WHERE 1=1`
+	       total_amount, created_by, created_at, updated_at FROM orders WHERE branch_id = $1`
 	var args []interface{}
+	args = append(args, branchID)
 
 	if status != "" {
 		query += ` AND status = $` + fmt.Sprintf("%d", len(args)+1)
@@ -382,9 +394,14 @@ func removeOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	orderID := vars["id"]
 	itemID := vars["itemId"]
+	branchID := r.Header.Get("X-Branch-ID")
 
 	var itemTotal float64
-	err := db.QueryRow(`SELECT item_total FROM order_items WHERE id = $1 AND order_id = $2`, itemID, orderID).Scan(&itemTotal)
+	err := db.QueryRow(`
+		SELECT oi.item_total FROM order_items oi
+		JOIN orders o ON oi.order_id = o.id
+		WHERE oi.id = $1 AND oi.order_id = $2 AND o.branch_id = $3
+	`, itemID, orderID, branchID).Scan(&itemTotal)
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "item_not_found"})
 		return
@@ -435,6 +452,7 @@ func removeOrderItem(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 func updateOrderStatus(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	orderID := mux.Vars(r)["id"]
+	branchID := r.Header.Get("X-Branch-ID")
 
 	var req struct {
 		Status string `json:"status"`
@@ -445,8 +463,8 @@ func updateOrderStatus(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := db.Exec(`
-		UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2
-	`, req.Status, orderID)
+		UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 AND branch_id = $3
+	`, req.Status, orderID, branchID)
 
 	if err != nil {
 		log.Printf("Failed to update status: %v", err)
