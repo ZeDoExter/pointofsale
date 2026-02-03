@@ -27,9 +27,11 @@ Frontend → API Gateway:8080 → Backend Services
 ```json
 {
   "access_token": "jwt_token_here",
-  "role": "admin",
+  "role": "ADMIN",
   "username": "admin",
-  "name": "Admin User"
+  "name": "Admin User",
+  "organization_id": "uuid",
+  "branch_id": "uuid"
 }
 ```
 
@@ -41,7 +43,7 @@ Frontend → API Gateway:8080 → Backend Services
 {
   "valid": true,
   "sub": "user_id",
-  "role": "admin"
+  "role": "ADMIN"
 }
 ```
 
@@ -54,6 +56,131 @@ Frontend → API Gateway:8080 → Backend Services
   "access_token": "new_jwt_token"
 }
 ```
+
+#### 4. **GET** `/api/auth/me`
+**Description**: ดึงข้อมูล user ปัจจุบัน
+**Headers**: `Authorization: Bearer {token}`
+**Response**:
+```json
+{
+  "id": "uuid",
+  "username": "manager.delicious",
+  "name": "John Manager",
+  "email": "john@delicious.com",
+  "role": "MANAGER",
+  "organization_id": "uuid",
+  "organization_name": "Delicious Thai Restaurant",
+  "branch_id": "uuid",
+  "branch_name": "Siam Branch"
+}
+```
+
+---
+
+## 🏢 Organizations & Branches (in Auth Service)
+
+### Organizations
+
+#### 1. **GET** `/api/organizations`
+**Description**: ดึงรายการองค์กรทั้งหมด (ADMIN only)
+**Headers**: `Authorization: Bearer {token}`
+**Response**:
+```json
+{
+  "organizations": [
+    {
+      "id": "uuid",
+      "name": "Delicious Thai Restaurant",
+      "slug": "delicious-thai",
+      "contact_email": "contact@delicious.com",
+      "contact_phone": "02-xxx-xxxx",
+      "plan_type": "FREE",
+      "is_active": true,
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+#### 2. **POST** `/api/organizations`
+**Description**: สร้างองค์กรใหม่ (ADMIN only)
+**Headers**: `Authorization: Bearer {token}`
+**Request Body**:
+```json
+{
+  "name": "New Restaurant",
+  "slug": "new-restaurant",
+  "contact_email": "contact@new.com",
+  "contact_phone": "02-xxx-xxxx",
+  "plan_type": "BASIC"
+}
+```
+
+#### 3. **GET** `/api/organizations/{id}`
+**Description**: ดึงข้อมูลองค์กร (ADMIN/MANAGER)
+**Headers**: `Authorization: Bearer {token}`
+
+#### 4. **PUT** `/api/organizations/{id}`
+**Description**: แก้ไขข้อมูลองค์กร (ADMIN only)
+**Headers**: `Authorization: Bearer {token}`
+
+### Branches
+
+#### 5. **GET** `/api/organizations/{orgId}/branches`
+**Description**: ดึงรายการสาขา (ADMIN/MANAGER)
+**Headers**: `Authorization: Bearer {token}`
+**Response**:
+```json
+{
+  "branches": [
+    {
+      "id": "uuid",
+      "organization_id": "uuid",
+      "name": "Siam Branch",
+      "slug": "siam",
+      "address": "123 Siam Road",
+      "city": "Bangkok",
+      "province": "Bangkok",
+      "postal_code": "10330",
+      "phone": "02-xxx-xxxx",
+      "email": "siam@delicious.com",
+      "opening_time": "10:00:00",
+      "closing_time": "22:00:00",
+      "is_active": true,
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+#### 6. **POST** `/api/organizations/{orgId}/branches`
+**Description**: สร้างสาขาใหม่ (ADMIN/MANAGER)
+**Headers**: `Authorization: Bearer {token}`
+**Request Body**:
+```json
+{
+  "name": "New Branch",
+  "slug": "new-branch",
+  "address": "456 New Road",
+  "city": "Bangkok",
+  "province": "Bangkok",
+  "postal_code": "10400",
+  "phone": "02-xxx-xxxx",
+  "email": "new@restaurant.com",
+  "opening_time": "09:00:00",
+  "closing_time": "21:00:00"
+}
+```
+
+#### 7. **GET** `/api/organizations/{orgId}/branches/{id}`
+**Description**: ดึงข้อมูลสาขา (ADMIN/MANAGER/CASHIER)
+**Headers**: `Authorization: Bearer {token}`
+
+#### 8. **PUT** `/api/organizations/{orgId}/branches/{id}`
+**Description**: แก้ไขข้อมูลสาขา (ADMIN/MANAGER)
+**Headers**: `Authorization: Bearer {token}`
 
 ---
 
