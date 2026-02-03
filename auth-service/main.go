@@ -70,13 +70,15 @@ func main() {
 			return
 		}
 
-		// Query user from database
-		var userID, passwordHash, role, name string
+		// Query user with org/branch context
+		var userID, passwordHash, role, fullName, email string
+		var organizationID, branchID sql.NullString
 		var isActive bool
-		err := db.QueryRow(
-			"SELECT id, password_hash, role, name, is_active FROM users WHERE username = $1",
-			req.Username,
-		).Scan(&userID, &passwordHash, &role, &name, &isActive)
+		err := db.QueryRow(`
+			SELECT u.id, u.password_hash, u.role, u.full_name, u.email, u.organization_id, u.branch_id, u.is_active
+			FROM users u
+			WHERE u.username = $1
+		`, req.Username).Scan(&userID, &passwordHash, &role, &fullName, &email, &organizationID, &branchID, &isActive)
 
 		if err == sql.ErrNoRows {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_credentials"})
@@ -93,28 +95,54 @@ func main() {
 			return
 		}
 
+		// Update last login
+		_, _ = db.Exec("UPDATE users SET last_login_at = NOW() WHERE id = $1", userID)
+
 		// TODO: Add password verification (bcrypt)
 		// For now, accepting any password for development
 
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		// Build JWT claims with scope
+		claims := jwt.MapClaims{
 			"sub":      userID,
 			"username": req.Username,
 			"role":     role,
-			"name":     name,
+			"name":     fullName,
+			"email":    email,
 			"iat":      time.Now().Unix(),
 			"exp":      time.Now().Add(8 * time.Hour).Unix(),
-		})
+		}
+
+		// Add org/branch context based on role
+		if organizationID.Valid {
+			claims["organization_id"] = organizationID.String
+		}
+		if branchID.Valid {
+			claims["branch_id"] = branchID.String
+		}
+
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 		signed, err := token.SignedString([]byte(jwtSecret))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_sign_failed"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+
+		// Prepare response
+		response := map[string]any{
 			"access_token": signed,
 			"role":         role,
 			"username":     req.Username,
-			"name":         name,
-		})
+			"name":         fullName,
+		}
+
+		if organizationID.Valid {
+			response["organization_id"] = organizationID.String
+		}
+		if branchID.Valid {
+			response["branch_id"] = branchID.String
+		}
+
+		writeJSON(w, http.StatusOK, response)
 	}).Methods(http.MethodPost)
 
 	router.HandleFunc("/api/auth/validate", func(w http.ResponseWriter, r *http.Request) {
@@ -164,12 +192,26 @@ func main() {
 		}
 
 		claims, _ := parsed.Claims.(jwt.MapClaims)
-		newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub":  claims["sub"],
-			"role": claims["role"],
-			"iat":  time.Now().Unix(),
-			"exp":  time.Now().Add(8 * time.Hour).Unix(),
-		})
+
+		// Preserve all claims in refresh token
+		newClaims := jwt.MapClaims{
+			"sub":      claims["sub"],
+			"username": claims["username"],
+			"role":     claims["role"],
+			"name":     claims["name"],
+			"email":    claims["email"],
+			"iat":      time.Now().Unix(),
+			"exp":      time.Now().Add(8 * time.Hour).Unix(),
+		}
+
+		if orgID, ok := claims["organization_id"]; ok {
+			newClaims["organization_id"] = orgID
+		}
+		if branchID, ok := claims["branch_id"]; ok {
+			newClaims["branch_id"] = branchID
+		}
+
+		newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, newClaims)
 		signed, err := newToken.SignedString([]byte(jwtSecret))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_sign_failed"})
@@ -179,6 +221,73 @@ func main() {
 			"access_token": signed,
 		})
 	}).Methods(http.MethodPost)
+
+	// GET /api/auth/me - Get current user info
+	router.HandleFunc("/api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing_token"})
+			return
+		}
+
+		tokenStr := strings.TrimPrefix(auth, "Bearer ")
+		parsed, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method")
+			}
+			return []byte(jwtSecret), nil
+		})
+		if err != nil || !parsed.Valid {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
+			return
+		}
+
+		claims, _ := parsed.Claims.(jwt.MapClaims)
+		userID := claims["sub"].(string)
+
+		// Get fresh user data from database
+		var fullName, email, role, username string
+		var organizationID, branchID sql.NullString
+		var orgName, branchName sql.NullString
+
+		err = db.QueryRow(`
+			SELECT u.username, u.full_name, u.email, u.role, u.organization_id, u.branch_id,
+			       o.name as org_name, b.name as branch_name
+			FROM users u
+			LEFT JOIN organizations o ON u.organization_id = o.id
+			LEFT JOIN branches b ON u.branch_id = b.id
+			WHERE u.id = $1 AND u.is_active = true
+		`, userID).Scan(&username, &fullName, &email, &role, &organizationID, &branchID, &orgName, &branchName)
+
+		if err != nil {
+			log.Printf("Failed to get user: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+			return
+		}
+
+		response := map[string]any{
+			"id":       userID,
+			"username": username,
+			"name":     fullName,
+			"email":    email,
+			"role":     role,
+		}
+
+		if organizationID.Valid {
+			response["organization_id"] = organizationID.String
+			if orgName.Valid {
+				response["organization_name"] = orgName.String
+			}
+		}
+		if branchID.Valid {
+			response["branch_id"] = branchID.String
+			if branchName.Valid {
+				response["branch_name"] = branchName.String
+			}
+		}
+
+		writeJSON(w, http.StatusOK, response)
+	}).Methods(http.MethodGet)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),

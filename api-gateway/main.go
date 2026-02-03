@@ -147,7 +147,7 @@ func authMiddleware(secret string, next http.Handler) http.Handler {
 			return
 		}
 
-		// Extract role from token
+		// Extract claims from token
 		claims, ok := parsed.Claims.(jwt.MapClaims)
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_claims"})
@@ -155,10 +155,21 @@ func authMiddleware(secret string, next http.Handler) http.Handler {
 		}
 
 		role, _ := claims["role"].(string)
+		userID, _ := claims["sub"].(string)
 
-		// Add role to request header for downstream services
+		// Extract org/branch context
+		organizationID, _ := claims["organization_id"].(string)
+		branchID, _ := claims["branch_id"].(string)
+
+		// Add context to request headers for downstream services
+		r.Header.Set("X-User-ID", userID)
 		r.Header.Set("X-User-Role", role)
-		r.Header.Set("X-User-ID", claims["sub"].(string))
+		if organizationID != "" {
+			r.Header.Set("X-Organization-ID", organizationID)
+		}
+		if branchID != "" {
+			r.Header.Set("X-Branch-ID", branchID)
+		}
 
 		next.ServeHTTP(w, r)
 	})
