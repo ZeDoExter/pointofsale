@@ -11,11 +11,14 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"bytes"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 )
+
+var notificationServiceURL string
 
 type Order struct {
 	ID             string    `json:"id"`
@@ -89,6 +92,11 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8083"
+	}
+
+	notificationServiceURL = os.Getenv("NOTIFICATION_SERVICE_URL")
+	if notificationServiceURL == "" {
+		notificationServiceURL = "http://localhost:8086"
 	}
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -259,6 +267,14 @@ func createOrder(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
 		return
 	}
+
+	// Publish event
+	publishEvent("order_created", map[string]interface{}{
+		"order_id":     orderID,
+		"order_number": orderNumber,
+		"status":       "OPEN",
+		"total_amount": subtotal + tax,
+	}, branchID, organizationID)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"order_id":     orderID,
@@ -506,6 +522,13 @@ func updateOrderStatus(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Publish event
+	organizationID := r.Header.Get("X-Organization-ID")
+	publishEvent("order_status_updated", map[string]interface{}{
+		"order_id": orderID,
+		"status":   req.Status,
+	}, branchID, organizationID)
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": req.Status})
 }
 
@@ -709,4 +732,36 @@ func getHourlySales(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, sales)
+}
+
+func publishEvent(eventType string, data map[string]interface{}, branchID, orgID string) {
+	if notificationServiceURL == "" {
+		return
+	}
+
+	event := map[string]interface{}{
+		"type":            eventType,
+		"data":            data,
+		"branch_id":       branchID,
+		"organization_id": orgID,
+	}
+
+	jsonData, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("Failed to marshal event: %v", err)
+		return
+	}
+
+	go func() {
+		resp, err := http.Post(
+			fmt.Sprintf("%s/api/events", notificationServiceURL),
+			"application/json",
+			bytes.NewBuffer(jsonData),
+		)
+		if err != nil {
+			log.Printf("Failed to publish event: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+	}()
 }

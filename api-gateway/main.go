@@ -18,10 +18,11 @@ import (
 )
 
 var services = map[string]string{
-	"auth":      "http://auth-service:8082",
-	"order":     "http://order-service:8083",
-	"promotion": "http://promotion-service:8084",
-	"payment":   "http://payment-service:8085",
+	"auth":         "http://auth-service:8082",
+	"order":        "http://order-service:8083",
+	"promotion":    "http://promotion-service:8084",
+	"payment":      "http://payment-service:8085",
+	"notification": "http://notification-service:8086",
 }
 
 func main() {
@@ -47,6 +48,9 @@ func main() {
 	if u := os.Getenv("PAYMENT_SERVICE_URL"); u != "" {
 		services["payment"] = u
 	}
+	if u := os.Getenv("NOTIFICATION_SERVICE_URL"); u != "" {
+		services["notification"] = u
+	}
 
 	router := mux.NewRouter()
 
@@ -60,6 +64,9 @@ func main() {
 	router.PathPrefix("/api/orders").Handler(proxyTo(services["order"]))
 	router.PathPrefix("/api/promotions").Handler(proxyTo(services["promotion"]))
 	router.PathPrefix("/api/payments").Handler(proxyTo(services["payment"]))
+	router.PathPrefix("/api/reports").Handler(proxyTo(services["order"])) // Reports go to order service
+	router.PathPrefix("/ws").Handler(proxyTo(services["notification"]))   // WebSocket
+	router.PathPrefix("/api/events").Handler(proxyTo(services["notification"]))
 
 	// CRITICAL: CORS must come first to handle preflight requests
 	handler := corsMiddleware(router)
