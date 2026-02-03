@@ -26,11 +26,13 @@ services:
       ORDER_SERVICE_URL: http://order-service:8083
       PROMOTION_SERVICE_URL: http://promotion-service:8084
       PAYMENT_SERVICE_URL: http://payment-service:8085
+      NOTIFICATION_SERVICE_URL: http://notification-service:8086
     depends_on:
       - auth-service
       - order-service
       - promotion-service
       - payment-service
+      - notification-service
 
   auth-service:
     build: ./auth-service
@@ -50,6 +52,7 @@ services:
     environment:
       PORT: "8083"
       DATABASE_URL: postgres://user:password@postgres:5432/pointofsale?sslmode=disable
+      NOTIFICATION_SERVICE_URL: http://notification-service:8086
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,6 +78,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "8086:8086"
+    environment:
+      PORT: "8086"
 
 volumes:
   postgres_data:

@@ -526,6 +526,8 @@ spec:
               value: "8083"
             - name: DATABASE_URL
               value: "postgres://user:password@postgres:5432/pointofsale?sslmode=disable"
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service:8086"
           ports:
             - containerPort: 8083
           readinessProbe:
@@ -653,6 +655,53 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: notification-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      containers:
+        - name: notification-service
+          image: pointofsale-notification-service
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PORT
+              value: "8086"
+          ports:
+            - containerPort: 8086
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8086
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8086
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - port: 8086
+      targetPort: 8086
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: api-gateway
 spec:
   replicas: 1
@@ -679,6 +728,8 @@ spec:
               value: "http://promotion-service:8084"
             - name: PAYMENT_SERVICE_URL
               value: "http://payment-service:8085"
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service:8086"
           ports:
             - containerPort: 8080
           readinessProbe:
