@@ -6,6 +6,7 @@ docker_build('pointofsale-payment-service', 'payment-service')
 docker_build('pointofsale-notification-service', 'notification-service')
 docker_build('pointofsale-frontend', 'frontend')
 
+k8s_yaml('kubernetes/configmaps.yaml')
 k8s_yaml('kubernetes/pos.yaml')
 
 k8s_resource('postgres', labels=['database'])
