@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -11,7 +12,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	"bytes"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"

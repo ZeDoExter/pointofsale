@@ -40,11 +40,11 @@ type Hub struct {
 }
 
 type Event struct {
-	Type         string                 `json:"type"`
-	Data         map[string]interface{} `json:"data"`
-	BranchID     string                 `json:"branch_id,omitempty"`
-	OrgID        string                 `json:"organization_id,omitempty"`
-	Timestamp    time.Time              `json:"timestamp"`
+	Type      string                 `json:"type"`
+	Data      map[string]interface{} `json:"data"`
+	BranchID  string                 `json:"branch_id,omitempty"`
+	OrgID     string                 `json:"organization_id,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
 }
 
 func newHub() *Hub {

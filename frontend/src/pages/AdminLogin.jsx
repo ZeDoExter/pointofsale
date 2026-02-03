@@ -17,6 +17,7 @@ export default function AdminLogin() {
       localStorage.setItem('role', data.role);
       localStorage.setItem('name', data.name);
       localStorage.setItem('username', data.username);
+      localStorage.setItem('user_id', data.user_id || data.id || '');
       
       // Store org/branch context if available
       if (data.organization_id) localStorage.setItem('organization_id', data.organization_id);
@@ -24,39 +25,109 @@ export default function AdminLogin() {
       if (data.branch_id) localStorage.setItem('branch_id', data.branch_id);
       if (data.branch_name) localStorage.setItem('branch_name', data.branch_name);
       
-      navigate('/admin');
+      // Route based on role
+      if (data.role === 'ADMIN') {
+        navigate('/admin');
+      } else if (data.role === 'MANAGER') {
+        navigate('/manager');
+      } else if (data.role === 'CASHIER') {
+        navigate('/cashier');
+      } else {
+        navigate('/admin');
+      }
     } catch (err) {
       setError('Login failed');
     }
   };
 
   return (
-    <div style={{ maxWidth: '400px', margin: '100px auto', padding: '20px' }}>
-      <h1>Admin Login</h1>
-      <form onSubmit={handleLogin}>
-        <div style={{ marginBottom: '15px' }}>
-          <input
-            type="text"
-            placeholder="Username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            style={{ width: '100%', padding: '10px', fontSize: '16px' }}
-          />
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#f3f4f6'
+    }}>
+      <div style={{
+        backgroundColor: 'white',
+        padding: '40px',
+        borderRadius: '12px',
+        boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+        width: '100%',
+        maxWidth: '400px'
+      }}>
+        <h1 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '30px', textAlign: 'center' }}>
+          🏪 POS Login
+        </h1>
+        <form onSubmit={handleLogin}>
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Username</label>
+            <input
+              type="text"
+              placeholder="Enter username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                fontSize: '16px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px'
+              }}
+            />
+          </div>
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Password</label>
+            <input
+              type="password"
+              placeholder="Enter password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                fontSize: '16px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px'
+              }}
+            />
+          </div>
+          {error && (
+            <p style={{
+              color: '#ef4444',
+              backgroundColor: '#fee2e2',
+              padding: '10px',
+              borderRadius: '6px',
+              marginBottom: '15px',
+              textAlign: 'center'
+            }}>
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            style={{
+              width: '100%',
+              padding: '12px',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              backgroundColor: '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer'
+            }}
+          >
+            Login
+          </button>
+        </form>
+        <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
+          <p style={{ fontSize: '12px', color: '#6b7280', margin: '0 0 8px 0', fontWeight: 'bold' }}>Demo Users:</p>
+          <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>• admin / anypassword (ADMIN)</p>
+          <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>• manager.delicious / test (MANAGER)</p>
+          <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>• cashier.siam / test (CASHIER)</p>
         </div>
-        <div style={{ marginBottom: '15px' }}>
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ width: '100%', padding: '10px', fontSize: '16px' }}
-          />
-        </div>
-        {error && <p style={{ color: 'red' }}>{error}</p>}
-        <button type="submit" style={{ width: '100%', padding: '10px', fontSize: '16px' }}>
-          Login
-        </button>
-      </form>
+      </div>
     </div>
   );
 }
