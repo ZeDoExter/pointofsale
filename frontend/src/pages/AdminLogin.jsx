@@ -15,6 +15,15 @@ export default function AdminLogin() {
       const { data } = await authAPI.login(username, password);
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('role', data.role);
+      localStorage.setItem('name', data.name);
+      localStorage.setItem('username', data.username);
+      
+      // Store org/branch context if available
+      if (data.organization_id) localStorage.setItem('organization_id', data.organization_id);
+      if (data.organization_name) localStorage.setItem('organization_name', data.organization_name);
+      if (data.branch_id) localStorage.setItem('branch_id', data.branch_id);
+      if (data.branch_name) localStorage.setItem('branch_name', data.branch_name);
+      
       navigate('/admin');
     } catch (err) {
       setError('Login failed');
