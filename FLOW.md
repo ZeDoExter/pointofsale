@@ -1,84 +1,120 @@
-# POS Flow & Status (Feb 3, 2026)
+# POS Flow & Requirements
 
-## Current Status
-- ✅ **Manager Dashboard**: Works with Settings tab to create/manage Cashier accounts
-- ✅ **Cashier Dashboard**: 3-column layout with table sessions, orders, stats
-- ✅ **Admin Dashboard**: Create/manage Organizations, Managers
-- 🚧 **Catalog Management**: Needs implementation
-- 🚧 **User Menu (QR)**: Basic structure, needs catalog integration
-- 🚧 **Payments**: Not integrated yet
+**Last Updated**: 2026-02-04
 
-## Tested Flows
-- Admin creates Organization + Branch
-- Admin creates Manager account, assigns to Organization (Branch is optional for managers)
-- Manager logs in → gets Organization context via JWT
-- Manager can see their branches via `/api/manager/branches` → auto-selects single branch
-- Manager creates Cashier accounts for their branches
-- Cashier can login and manage table sessions
+---
 
-## Backend Endpoints (Implemented)
-### Auth Service
-- `POST /api/auth/login` - User login (returns JWT with org_id, branch_id, role)
-- `GET /api/manager/branches` - Manager's branches (filtered by org_id from JWT)
-- `GET /api/users/cashiers` - List cashiers (optional branch_id filter)
-- `POST /api/users/cashiers` - Create cashier (manager-only, validates branch in org)
-- `DELETE /api/users/cashiers/{id}` - Delete cashier (manager-only, scoped to org)
-- `POST /api/users/managers` - Create manager account (admin-only)
-- `DELETE /api/users/managers/{id}` - Delete manager (admin-only)
-- `PUT /api/users/managers/{id}` - Assign organization to manager
+## 🎯 Flow Overview
 
-## Frontend Components (Implemented)
-- `ManagerDashboard.jsx` - 3 tabs: Overview (stats), Orders (table), Settings (add cashier)
-- `CashierDashboard.jsx` - 3 columns: Sessions, Orders, Stats
-- `AdminDashboard.jsx` - 2 tabs: Managers, Organizations
-- `UserMenu.jsx` - Customer menu for QR flow (basic)
+### Admin Dashboard
+- แสดง **list ของ Manager accounts** ทั้งหมด
+- แต่ละ Manager สามารถ **expand** เพื่อดู:
+  - สาขา (Branches) ที่ Manager นั้นดูแล
+  - รายละเอียดร้าน (Organization) ที่ Manager อยู่
+- ไม่ต้องสร้าง Organization/Branch แยกแล้ว (focus ที่ Manager)
 
-## Next Work Targets
-1. **Catalog Management** - Manager builds product types/options, availability flags, prices
-   - Backend: Product, ProductType, ProductOption tables + API endpoints
-   - Frontend: Manager catalog UI with live availability toggle
-   
-2. **User Menu Enhancement** - Wire to catalog, show option groups, required flags
-   - Parse product options in order items
-   - Validate required options before checkout
-   
-3. **Table Session API** - Real backend sessions (currently on cashier frontend only)
-   - `POST /api/qr-sessions` - Create session with table_id, branch_id, generate token
-   - `GET /api/qr-sessions?status=OPEN` - List open sessions by branch
-   - `PUT /api/qr-sessions/{id}/close` - Close session (settle bill)
-   
-4. **Order Service Integration** - Accept session_token, tie orders to tables
-   - Capture `qr_session_token` and `table_id` in order
-   - Broadcast order updates via WebSocket by branch/org
-   
-5. **Payments** - Payment-service integration for checkout
-   - Finalize order total (catalog price + options + promotions)
-   - Accept payment method, mark order PAID
-   
-6. **Notifications** - Real-time updates for kitchen/cashier
-   - Order created → kitchen staff sees on screen
-   - Order ready → cashier notified, customer can collect
+---
 
-## Known Issues & TODOs
-- [ ] Password hashing (currently plain text with "dev:" prefix)
-- [ ] QR sessions not persisted to database yet
-- [ ] Cashier dashboard uses client-side sessions (needs API integration)
-- [ ] User menu doesn't show real catalog products
-- [ ] Permissions/RBAC not fully enforced per endpoint
-- [ ] WebSocket for real-time updates not implemented
-- [ ] Promotion-service not integrated
+### Manager Dashboard
+- **จัดการ Products/Categories**:
+  - สร้าง/แก้ไข/ลบ products
+  - จัดหมวดหมู่ (categories)
+  - **Availability**: Boolean ง่ายๆ (ขาย/ไม่ขาย) - ไม่ต้อง inventory ซับซ้อน
+  - **Product Options**:
+    - หลายตัวเลือก (multiple choice) - เช่น Size: Small, Medium, Large
+    - ต้องเลือก (required) - เช่น Spice Level: Mild, Medium, Hot
+    - ราคาเพิ่ม (price modifier) - เช่น Large +20 บาท
+- Products ที่ Manager สร้างจะ **ใช้ได้ทุกสาขา** ที่มี Cashier อยู่
 
-## Testing Checklist (WIP)
-- [x] Create/list organizations
-- [x] Create/list branches for organization
-- [x] Admin can create manager accounts
-- [x] Manager sees their branches
-- [x] Manager can create cashier accounts
-- [x] Cashier can login
-- [ ] Manager edits product catalog
-- [ ] User sees catalog in QR menu
-- [ ] Cashier opens table session, gets QR link
-- [ ] Customer orders via QR link
-- [ ] Order appears on cashier dashboard
-- [ ] Kitchen sees order status changes
-- [ ] Payment processes successfully
+---
+
+### Cashier Dashboard
+1. **เปิด Table Session**:
+   - Cashier เลือกโต๊ะ → สร้าง Table Session
+   - ได้ QR Code สำหรับลูกค้า
+   - **เปิด WebSocket** สำหรับ realtime updates
+
+2. **ลูกค้าสั่งอาหาร**:
+   - ลูกค้า scan QR Code → เข้า User Menu
+   - เห็น products ที่ Manager สร้างไว้
+   - สั่งอาหารได้ → Order แสดงแบบ **realtime ผ่าน WebSocket**
+   - สามารถสั่งเพิ่มได้เรื่อยๆ (ไม่เกิน 1-2 ชั่วโมง)
+
+3. **จ่ายเงิน**:
+   - ลูกค้าสามารถจ่ายได้หลายวิธี:
+     - QR Code ที่หน้าเว็บ
+     - จ่ายที่หน้า counter (Cashier จัดการ)
+   - **Payment Service** จัดการการชำระเงิน
+
+4. **ปิด Table Session**:
+   - Cashier หรือ Manager ปิดได้ (Manager ต้องเลือกสาขาก่อน)
+   - เมื่อปิด → สรุป **Transaction/Bill** สุดท้ายของโต๊ะ
+   - ส่ง Bill ให้ลูกค้า
+
+---
+
+## 🔄 Complete Flow
+
+```
+1. Admin → ดู Manager list → Expand ดูสาขาและร้าน
+
+2. Manager → จัดการ Products:
+   - สร้าง Product พร้อม Options
+   - ตั้ง Availability (ขาย/ไม่ขาย)
+   - Products ใช้ได้ทุกสาขาที่มี Cashier
+
+3. Cashier → เปิด Table Session:
+   - เลือกโต๊ะ → สร้าง Session → ได้ QR Code
+   - เปิด WebSocket สำหรับ realtime
+
+4. ลูกค้า → Scan QR Code:
+   - เห็น Products จาก Manager
+   - สั่งอาหาร → Order แสดง realtime
+   - สั่งเพิ่มได้เรื่อยๆ
+
+5. จ่ายเงิน:
+   - QR Code ที่หน้าเว็บ หรือ
+   - จ่ายที่ counter (Cashier)
+
+6. ปิด Table Session:
+   - Cashier/Manager ปิด Session
+   - สรุป Transaction → Generate Bill
+   - ส่ง Bill ให้ลูกค้า
+```
+
+---
+
+## 📋 Technical Requirements
+
+### Backend
+- [ ] Products API (CRUD) - Manager only
+- [ ] Product Options API (multiple choice, required, price modifier)
+- [ ] Table Session API (open/close)
+- [ ] WebSocket for realtime orders
+- [ ] Payment API (multiple methods)
+- [ ] Bill/Transaction generation
+
+### Frontend
+- [ ] Admin: Manager list with expandable branches/orgs
+- [ ] Manager: Product management UI with options
+- [ ] Cashier: Table Session management
+- [ ] User Menu: Real-time order updates via WebSocket
+- [ ] Payment: QR Code + Counter payment
+- [ ] Bill: Generate and display
+
+---
+
+## 🚫 Not Required (For Now)
+- ❌ Inventory system (ใช้ boolean availability แทน)
+- ❌ Promotion system (ไว้ทีหลัง)
+
+---
+
+## ✅ Current Status
+- ✅ Authentication & User Management
+- ✅ Organization & Branch Management
+- ✅ Basic Order System
+- 🚧 Product/Catalog System (ต้องทำ)
+- 🚧 WebSocket Realtime (ต้องทำ)
+- 🚧 Payment Integration (ต้องทำ)
+- 🚧 Bill Generation (ต้องทำ)

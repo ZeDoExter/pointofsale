@@ -9,3 +9,4 @@ vendor/
 dist/
 bin/
 tmp/
+*.md
