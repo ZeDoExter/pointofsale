@@ -102,6 +102,61 @@ type HourlySales struct {
 	TotalRevenue float64 `json:"total_revenue"`
 }
 
+type Product struct {
+	ID             string          `json:"id"`
+	OrganizationID string          `json:"organization_id"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	Price          float64         `json:"price"`
+	Category       string          `json:"category"`
+	ImageURL       string          `json:"image_url"`
+	IsAvailable    bool            `json:"is_available"`
+	SortOrder      int             `json:"sort_order"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	Options        []ProductOption `json:"options,omitempty"`
+}
+
+type ProductOption struct {
+	ID            string  `json:"id"`
+	ProductID     string  `json:"product_id"`
+	OptionGroup   string  `json:"option_group"`
+	OptionName    string  `json:"option_name"`
+	PriceModifier float64 `json:"price_modifier"`
+	IsRequired    bool    `json:"is_required"`
+	SortOrder     int     `json:"sort_order"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type CreateProductRequest struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Price       float64 `json:"price"`
+	Category    string  `json:"category"`
+	ImageURL    string  `json:"image_url"`
+	IsAvailable bool    `json:"is_available"`
+	SortOrder   int     `json:"sort_order"`
+	Options     []CreateProductOptionRequest `json:"options"`
+}
+
+type CreateProductOptionRequest struct {
+	OptionGroup   string  `json:"option_group"`
+	OptionName    string  `json:"option_name"`
+	PriceModifier float64 `json:"price_modifier"`
+	IsRequired    bool    `json:"is_required"`
+	SortOrder     int     `json:"sort_order"`
+}
+
+type UpdateProductRequest struct {
+	Name        *string  `json:"name"`
+	Description *string  `json:"description"`
+	Price       *float64 `json:"price"`
+	Category    *string  `json:"category"`
+	ImageURL    *string  `json:"image_url"`
+	IsAvailable *bool    `json:"is_available"`
+	SortOrder   *int     `json:"sort_order"`
+}
+
 // tenantContext extracts org/branch/user context from gateway headers.
 func tenantContext(r *http.Request) (branchID, orgID, userID string) {
 	branchID = r.Header.Get("X-Branch-ID")
@@ -467,6 +522,27 @@ func main() {
 	router.HandleFunc("/api/qr-sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
 		closeQRSession(db, w, r)
 	}).Methods(http.MethodPut)
+
+	// Products endpoints
+	router.HandleFunc("/api/products", func(w http.ResponseWriter, r *http.Request) {
+		listProducts(db, w, r)
+	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/products", func(w http.ResponseWriter, r *http.Request) {
+		createProduct(db, w, r)
+	}).Methods(http.MethodPost)
+
+	router.HandleFunc("/api/products/{id}", func(w http.ResponseWriter, r *http.Request) {
+		getProduct(db, w, r)
+	}).Methods(http.MethodGet)
+
+	router.HandleFunc("/api/products/{id}", func(w http.ResponseWriter, r *http.Request) {
+		updateProduct(db, w, r)
+	}).Methods(http.MethodPut)
+
+	router.HandleFunc("/api/products/{id}", func(w http.ResponseWriter, r *http.Request) {
+		deleteProduct(db, w, r)
+	}).Methods(http.MethodDelete)
 
 	// Reports endpoints
 	router.HandleFunc("/api/reports/sales", func(w http.ResponseWriter, r *http.Request) {
@@ -1109,6 +1185,345 @@ func getHourlySales(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, sales)
+}
+
+func listProducts(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	_, orgID, _ := tenantContext(r)
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "organization_required"})
+		return
+	}
+
+	category := r.URL.Query().Get("category")
+	availableOnly := r.URL.Query().Get("available_only")
+	branchID := r.URL.Query().Get("branch_id") // For public access (QR menu)
+
+	query := `
+		SELECT id, organization_id, name, description, price, category, image_url, 
+		       is_available, sort_order, created_at, updated_at
+		FROM products
+		WHERE organization_id = $1
+	`
+	args := []interface{}{orgID}
+	argPos := 2
+
+	if category != "" {
+		query += fmt.Sprintf(" AND category = $%d", argPos)
+		args = append(args, category)
+		argPos++
+	}
+
+	if availableOnly == "true" || branchID != "" {
+		query += fmt.Sprintf(" AND is_available = true")
+	}
+
+	query += " ORDER BY sort_order, name LIMIT 500"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Failed to list products: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer rows.Close()
+
+	var products []Product
+	for rows.Next() {
+		var p Product
+		var desc, cat, img sql.NullString
+		err := rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &desc, &p.Price, &cat, &img,
+			&p.IsAvailable, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		if err != nil {
+			log.Printf("Failed to scan product: %v", err)
+			continue
+		}
+		if desc.Valid {
+			p.Description = desc.String
+		}
+		if cat.Valid {
+			p.Category = cat.String
+		}
+		if img.Valid {
+			p.ImageURL = img.String
+		}
+
+		// Load options
+		optRows, err := db.Query(`
+			SELECT id, product_id, option_group, option_name, price_modifier, 
+			       is_required, sort_order, created_at
+			FROM product_options
+			WHERE product_id = $1
+			ORDER BY option_group, sort_order
+		`, p.ID)
+		if err == nil {
+			defer optRows.Close()
+			for optRows.Next() {
+				var opt ProductOption
+				err := optRows.Scan(&opt.ID, &opt.ProductID, &opt.OptionGroup, &opt.OptionName,
+					&opt.PriceModifier, &opt.IsRequired, &opt.SortOrder, &opt.CreatedAt)
+				if err == nil {
+					p.Options = append(p.Options, opt)
+				}
+			}
+		}
+
+		products = append(products, p)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"products": products})
+}
+
+func getProduct(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	_, orgID, _ := tenantContext(r)
+
+	var p Product
+	var desc, cat, img sql.NullString
+	err := db.QueryRow(`
+		SELECT id, organization_id, name, description, price, category, image_url,
+		       is_available, sort_order, created_at, updated_at
+		FROM products
+		WHERE id = $1 AND organization_id = $2
+	`, id, orgID).Scan(&p.ID, &p.OrganizationID, &p.Name, &desc, &p.Price, &cat, &img,
+		&p.IsAvailable, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "product_not_found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to get product: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	if desc.Valid {
+		p.Description = desc.String
+	}
+	if cat.Valid {
+		p.Category = cat.String
+	}
+	if img.Valid {
+		p.ImageURL = img.String
+	}
+
+	// Load options
+	optRows, err := db.Query(`
+		SELECT id, product_id, option_group, option_name, price_modifier,
+		       is_required, sort_order, created_at
+		FROM product_options
+		WHERE product_id = $1
+		ORDER BY option_group, sort_order
+	`, p.ID)
+	if err == nil {
+		defer optRows.Close()
+		for optRows.Next() {
+			var opt ProductOption
+			err := optRows.Scan(&opt.ID, &opt.ProductID, &opt.OptionGroup, &opt.OptionName,
+				&opt.PriceModifier, &opt.IsRequired, &opt.SortOrder, &opt.CreatedAt)
+			if err == nil {
+				p.Options = append(p.Options, opt)
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, p)
+}
+
+func createProduct(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	_, orgID, userID := tenantContext(r)
+	if orgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "organization_required"})
+		return
+	}
+
+	// Check role - only MANAGER can create products
+	role := r.Header.Get("X-User-Role")
+	if role != "MANAGER" && role != "ADMIN" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	var req CreateProductRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	if req.Name == "" || req.Price <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	productID := uuid.New().String()
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("Failed to start transaction: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		INSERT INTO products (id, organization_id, name, description, price, category, 
+		                     image_url, is_available, sort_order, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+	`, productID, orgID, req.Name, nullable(req.Description), req.Price,
+		nullable(req.Category), nullable(req.ImageURL), req.IsAvailable, req.SortOrder)
+
+	if err != nil {
+		log.Printf("Failed to create product: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	// Create options
+	for _, optReq := range req.Options {
+		optID := uuid.New().String()
+		_, err := tx.Exec(`
+			INSERT INTO product_options (id, product_id, option_group, option_name, 
+			                            price_modifier, is_required, sort_order, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		`, optID, productID, optReq.OptionGroup, optReq.OptionName,
+			optReq.PriceModifier, optReq.IsRequired, optReq.SortOrder)
+		if err != nil {
+			log.Printf("Failed to create product option: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+			return
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("Failed to commit: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	publishEvent("product_created", map[string]interface{}{
+		"product_id": productID,
+		"name":       req.Name,
+	}, "", orgID)
+
+	writeJSON(w, http.StatusCreated, map[string]string{"id": productID})
+}
+
+func updateProduct(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	_, orgID, _ := tenantContext(r)
+
+	// Check role
+	role := r.Header.Get("X-User-Role")
+	if role != "MANAGER" && role != "ADMIN" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	var req UpdateProductRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+
+	// Build update query dynamically
+	updates := []string{}
+	args := []interface{}{}
+	argPos := 1
+
+	if req.Name != nil {
+		updates = append(updates, fmt.Sprintf("name = $%d", argPos))
+		args = append(args, *req.Name)
+		argPos++
+	}
+	if req.Description != nil {
+		updates = append(updates, fmt.Sprintf("description = $%d", argPos))
+		args = append(args, nullable(*req.Description))
+		argPos++
+	}
+	if req.Price != nil {
+		updates = append(updates, fmt.Sprintf("price = $%d", argPos))
+		args = append(args, *req.Price)
+		argPos++
+	}
+	if req.Category != nil {
+		updates = append(updates, fmt.Sprintf("category = $%d", argPos))
+		args = append(args, nullable(*req.Category))
+		argPos++
+	}
+	if req.ImageURL != nil {
+		updates = append(updates, fmt.Sprintf("image_url = $%d", argPos))
+		args = append(args, nullable(*req.ImageURL))
+		argPos++
+	}
+	if req.IsAvailable != nil {
+		updates = append(updates, fmt.Sprintf("is_available = $%d", argPos))
+		args = append(args, *req.IsAvailable)
+		argPos++
+	}
+	if req.SortOrder != nil {
+		updates = append(updates, fmt.Sprintf("sort_order = $%d", argPos))
+		args = append(args, *req.SortOrder)
+		argPos++
+	}
+
+	if len(updates) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no_updates"})
+		return
+	}
+
+	updates = append(updates, "updated_at = NOW()")
+	args = append(args, id, orgID)
+
+	query := fmt.Sprintf(`
+		UPDATE products
+		SET %s
+		WHERE id = $%d AND organization_id = $%d
+	`, strings.Join(updates, ", "), argPos, argPos+1)
+
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		log.Printf("Failed to update product: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "product_not_found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func deleteProduct(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	_, orgID, _ := tenantContext(r)
+
+	// Check role
+	role := r.Header.Get("X-User-Role")
+	if role != "MANAGER" && role != "ADMIN" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	res, err := db.Exec(`
+		DELETE FROM products
+		WHERE id = $1 AND organization_id = $2
+	`, id, orgID)
+
+	if err != nil {
+		log.Printf("Failed to delete product: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "product_not_found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func publishEvent(eventType string, data map[string]interface{}, branchID, orgID string) {

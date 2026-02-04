@@ -281,6 +281,46 @@ CREATE TABLE payment_methods (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- 11. PRODUCTS (Menu items - managed by Manager, available to all branches)
+-- Products created by Manager are available to all branches with Cashiers
+CREATE TABLE products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  price NUMERIC(10, 2) NOT NULL,
+  category VARCHAR(100),
+  image_url TEXT,
+  is_available BOOLEAN NOT NULL DEFAULT true, -- Simple boolean availability
+  
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_products_org ON products(organization_id);
+CREATE INDEX idx_products_available ON products(is_available) WHERE is_available = true;
+CREATE INDEX idx_products_category ON products(category);
+
+-- 12. PRODUCT_OPTIONS (Product options like Size, Spice Level, etc.)
+-- Supports multiple choice, required options, and price modifiers
+CREATE TABLE product_options (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  
+  option_group VARCHAR(100) NOT NULL, -- e.g., "Size", "Spice Level"
+  option_name VARCHAR(100) NOT NULL, -- e.g., "Large", "Medium Spicy"
+  price_modifier NUMERIC(10, 2) DEFAULT 0, -- Additional price (can be negative)
+  is_required BOOLEAN DEFAULT false, -- Must select one from this group
+  
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_product_options_product ON product_options(product_id);
+CREATE INDEX idx_product_options_group ON product_options(product_id, option_group);
+
 -- ============================================================================
 -- VIEWS FOR FAST REPORTING
 -- ============================================================================
