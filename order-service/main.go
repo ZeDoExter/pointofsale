@@ -413,6 +413,21 @@ func listQRSessions(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
+func getQRSessionByToken(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	token := mux.Vars(r)["token"]
+	sess, err := findActiveQRSession(db, token)
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session_not_found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to get qr session: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
 func closeQRSession(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	branchID, orgID, userID := tenantContext(r)
@@ -522,6 +537,10 @@ func main() {
 	router.HandleFunc("/api/qr-sessions/{id}/close", func(w http.ResponseWriter, r *http.Request) {
 		closeQRSession(db, w, r)
 	}).Methods(http.MethodPut)
+
+	router.HandleFunc("/api/qr-sessions/token/{token}", func(w http.ResponseWriter, r *http.Request) {
+		getQRSessionByToken(db, w, r)
+	}).Methods(http.MethodGet)
 
 	// Products endpoints
 	router.HandleFunc("/api/products", func(w http.ResponseWriter, r *http.Request) {
@@ -1189,6 +1208,12 @@ func getHourlySales(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 func listProducts(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	_, orgID, _ := tenantContext(r)
+	
+	// For public access (QR menu), allow organization_id from query param
+	if orgID == "" {
+		orgID = r.URL.Query().Get("organization_id")
+	}
+	
 	if orgID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "organization_required"})
 		return

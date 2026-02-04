@@ -43,6 +43,7 @@ export const orderAPI = {
 export const sessionAPI = {
   list: (params) => api.get('/api/qr-sessions', { params }),
   create: (tableNumber) => api.post('/api/qr-sessions', { table_number: tableNumber }),
+  getByToken: (token) => api.get(`/api/qr-sessions/token/${token}`),
   close: (id) => api.put(`/api/qr-sessions/${id}/close`),
 };
 
