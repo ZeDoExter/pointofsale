@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api, { orderAPI, sessionAPI } from '../services/api';
+import { orderAPI, sessionAPI } from '../services/api';
 
 const styles = {
   page: { minHeight: '100vh', background: '#f1f5f9', display: 'flex', flexDirection: 'column' },
@@ -126,8 +126,8 @@ export default function CashierDashboard() {
 
   const loadOrders = async () => {
     try {
-      const { data } = await api.get('/api/orders');
-      const list = Array.isArray(data) ? data : (Array.isArray(data?.orders) ? data.orders : []);
+      const { data } = await orderAPI.list();
+      const list = Array.isArray(data?.orders) ? data.orders : [];
       setOrders(list);
     } catch (err) {
       console.error('Failed to load orders:', err);

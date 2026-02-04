@@ -62,7 +62,8 @@ const KitchenDisplay = () => {
         },
       });
       const data = await response.json();
-      setOrders(data.filter(order => order.status === 'OPEN' || order.status === 'CONFIRMED'));
+      const orders = Array.isArray(data?.orders) ? data.orders : [];
+      setOrders(orders.filter(order => order.status === 'OPEN' || order.status === 'CONFIRMED'));
     } catch (error) {
       console.error('Failed to fetch orders:', error);
     }

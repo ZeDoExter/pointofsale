@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api from '../services/api';
+import api, { orderAPI } from '../services/api';
 
 const styles = {
   page: { minHeight: '100vh', background: '#f1f5f9' },
@@ -144,8 +144,8 @@ export default function ManagerDashboard() {
 
   const loadOrders = async () => {
     try {
-      const { data } = await api.get('/api/orders');
-      const list = Array.isArray(data) ? data : (Array.isArray(data?.orders) ? data.orders : []);
+      const { data } = await orderAPI.list();
+      const list = Array.isArray(data?.orders) ? data.orders : [];
       setOrders(list.slice(0, 20)); // Show last 20
     } catch (err) {
       console.error('Failed to load orders:', err);
